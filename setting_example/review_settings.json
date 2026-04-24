@@ -1,0 +1,62 @@
+{
+  "defaultMode": "acceptEdits",
+  "additionalDirectories": [
+    "../agent-worktree-comm"
+  ],
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "TodoWrite",
+      "Monitor",
+      "Bash(*)"
+    ],
+    "deny": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git stash *)",
+      "Bash(git reset *)",
+      "Bash(git clean *)",
+      "Bash(git branch -D *)",
+      "Bash(git branch -d *)",
+      "Bash(git filter-branch *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr close *)",
+      "Bash(gh issue create *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue close *)",
+      "Bash(gh repo delete *)",
+      "Bash(gh release delete *)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(sudo *)",
+      "Bash(chmod *)",
+      "Bash(chown *)",
+      "Bash(npm install *)",
+      "Bash(go get *)",
+      "Bash(go install *)",
+      "Bash(pip install *)",
+      "Bash(go test *)",
+      "Bash(npm test *)",
+      "Bash(vitest *)",
+      "Bash(jest *)",
+      "Bash(pytest *)",
+      "Bash(docker compose up *)",
+      "Bash(docker system prune *)",
+      "Bash(docker volume rm *)",
+      "Bash(docker rmi *)",
+      "Bash(docker kill *)"
+    ]
+  }
+}
