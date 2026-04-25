@@ -1,0 +1,32 @@
+# Project-specific config for the `agents` orchestrator.
+# Sourced by ./agents — bash variables only.
+#
+# Copy this file to `.agents.sh` and edit. `.agents.sh` is gitignored so
+# each project's local config stays out of the comm repo.
+#
+# Required:
+#   PROJECT          tmux session prefix (sessions become "<PROJECT>-<role>")
+#   ROLES            bash array of role names; standard vocab: pm | back | front | review
+#   REPO_URL         git URL cloned by `agents init` for each role
+#
+# Optional (with defaults if unset):
+#   SEPARATOR        between repo name and role; default "_"
+#   ATTACH_TARGET    role to attach to on `agents up`; default "pm"
+#   BOOT_SLEEP       seconds to wait after launching claude before sending the
+#                    bootstrap prompt; default 2
+#   BOOTSTRAP_PROMPT first text sent to each session after claude boots
+#   CLAUDE_CMD       command launched in each tmux session; default "claude"
+#                    (e.g. "claude --continue" to resume the previous conversation)
+#
+# For irregular worktree layouts, override the resolver:
+#   worktree_dir() {
+#     case "$1" in
+#       pm)     echo "main" ;;
+#       *)      echo "wt-$1" ;;
+#     esac
+#   }
+
+PROJECT=myproject
+ROLES=(pm back front review)
+REPO_URL=https://github.com/owner/repo.git
+ATTACH_TARGET=pm

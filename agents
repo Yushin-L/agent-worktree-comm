@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Multi-agent tmux orchestrator for the agent-worktree-comm setup.
+#
+# Reads project-specific config from `<this-dir>/.agents.sh` and resolves
+# worktree paths relative to the project root (parent of this script's
+# directory).
+#
+# Subcommands:
+#   agents up                  start every role's tmux session, attach to ATTACH_TARGET
+#   agents down                kill every role's tmux session
+#   agents status              dump last 5 lines of each session
+#   agents attach [role]       attach to a specific role (default: ATTACH_TARGET)
+#   agents init                (new project) clone REPO_URL per role + copy
+#                              CLAUDE.md / settings.json templates + scaffold
+#                              messages/ and old/ directories.
+#
+# Standard ROLES vocab: pm | back | front | review. Each value must have
+# matching templates at `claude.md_example/<role>_CLAUDE.md` and
+# `setting_example/<role>_settings.json`. Add new roles by adding both
+# templates first.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+CONFIG="$SCRIPT_DIR/.agents.sh"
+
+[[ -f "$CONFIG" ]] || {
+  echo "agents: missing $CONFIG — copy .agents.sh.example to .agents.sh and edit. See README.human.md." >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$CONFIG"
+
+: "${PROJECT:?PROJECT must be set in .agents.sh}"
+: "${ROLES:?ROLES array must be set in .agents.sh}"
+: "${BOOTSTRAP_PROMPT:=CLAUDE.md의 Session Startup Watcher 지침대로 inbox 모니터링을 시작해줘.}"
+: "${ATTACH_TARGET:=pm}"
+: "${BOOT_SLEEP:=2}"
+: "${SEPARATOR:=_}"
+: "${CLAUDE_CMD:=claude}"
+
+# Default worktree resolver: derive directory name from REPO_URL.
+# Override worktree_dir() in .agents.sh for irregular layouts (e.g. legacy projects).
+if ! declare -F worktree_dir >/dev/null; then
+  worktree_dir() {
+    [[ -n "${REPO_URL:-}" ]] || {
+      echo "agents: REPO_URL unset and no worktree_dir() override" >&2; exit 1
+    }
+    local repo
+    repo=$(basename "$REPO_URL" .git)
+    echo "${repo}${SEPARATOR}$1"
+  }
+fi
+
+session_name() { echo "${PROJECT}-$1"; }
+
+start_role() {
+  local role="$1"
+  local session; session="$(session_name "$role")"
+  local dir="$PROJECT_ROOT/$(worktree_dir "$role")"
+
+  if tmux has-session -t "$session" 2>/dev/null; then
+    echo "[$session] already running — skip"
+    return
+  fi
+  if [[ ! -d "$dir" ]]; then
+    echo "[$session] worktree missing: $dir" >&2
+    return 1
+  fi
+  tmux new-session -d -s "$session" -c "$dir" "$CLAUDE_CMD"
+  sleep "$BOOT_SLEEP"
+  tmux send-keys -t "$session" "$BOOTSTRAP_PROMPT" Enter
+  echo "[$session] up"
+}
+
+kill_role() {
+  local s; s="$(session_name "$1")"
+  if tmux has-session -t "$s" 2>/dev/null; then
+    tmux kill-session -t "$s" && echo "[$s] killed"
+  else
+    echo "[$s] not running"
+  fi
+}
+
+show_role() {
+  local s; s="$(session_name "$1")"
+  if tmux has-session -t "$s" 2>/dev/null; then
+    echo "=== $s (UP) ==="
+    tmux capture-pane -t "$s" -p | tail -5
+  else
+    echo "=== $s (DOWN) ==="
+  fi
+  echo
+}
+
+cmd_up() {
+  for role in "${ROLES[@]}"; do start_role "$role"; done
+  echo
+  echo "${PROJECT}-* sessions:"
+  tmux ls 2>/dev/null | grep "^${PROJECT}-" || true
+  echo
+  exec tmux attach -t "$(session_name "$ATTACH_TARGET")"
+}
+
+cmd_down() {
+  for role in "${ROLES[@]}"; do kill_role "$role"; done
+}
+
+cmd_status() {
+  for role in "${ROLES[@]}"; do show_role "$role"; done
+}
+
+cmd_attach() {
+  local role="${1:-$ATTACH_TARGET}"
+  exec tmux attach -t "$(session_name "$role")"
+}
+
+cmd_init() {
+  : "${REPO_URL:?REPO_URL must be set in .agents.sh for init}"
+
+  # 1) Validate ROLES vocab — each role needs both example templates.
+  local missing=()
+  for role in "${ROLES[@]}"; do
+    [[ -f "$SCRIPT_DIR/claude.md_example/${role}_CLAUDE.md" ]] \
+      || missing+=("claude.md_example/${role}_CLAUDE.md")
+    [[ -f "$SCRIPT_DIR/setting_example/${role}_settings.json" ]] \
+      || missing+=("setting_example/${role}_settings.json")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "agents init: missing example files for these roles:" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    echo "  Each role in ROLES must have both templates above. Add them or remove the role." >&2
+    exit 1
+  fi
+
+  # 2) Guard against re-init: any target worktree dir exists → abort.
+  local existing=()
+  for role in "${ROLES[@]}"; do
+    local dir="$PROJECT_ROOT/$(worktree_dir "$role")"
+    [[ -d "$dir" ]] && existing+=("$dir")
+  done
+  if [[ ${#existing[@]} -gt 0 ]]; then
+    echo "agents init: project already initialized (these dirs exist):" >&2
+    printf '  - %s\n' "${existing[@]}" >&2
+    echo "  Aborting to avoid clobbering. Remove the dirs manually if a fresh init is intended." >&2
+    exit 1
+  fi
+
+  # 3) Preview.
+  echo "Will clone $REPO_URL into ${#ROLES[@]} worktree(s) under $PROJECT_ROOT:"
+  for role in "${ROLES[@]}"; do
+    echo "  - $(worktree_dir "$role")  (role: $role)"
+  done
+  echo
+
+  # 4) Clone + copy templates + substitute placeholders per role.
+  for role in "${ROLES[@]}"; do
+    local dir_name; dir_name=$(worktree_dir "$role")
+    local target="$PROJECT_ROOT/$dir_name"
+
+    echo "[$role] cloning $REPO_URL → $dir_name"
+    git clone "$REPO_URL" "$target"
+
+    echo "[$role] copying CLAUDE.md template"
+    cp "$SCRIPT_DIR/claude.md_example/${role}_CLAUDE.md" "$target/CLAUDE.md"
+
+    echo "[$role] copying settings.json template"
+    mkdir -p "$target/.claude"
+    cp "$SCRIPT_DIR/setting_example/${role}_settings.json" "$target/.claude/settings.json"
+
+    echo "[$role] substituting placeholders"
+    sed -i \
+      -e "s|<project>|${PROJECT}|g" \
+      -e "s|<ABS-PATH-TO>|${PROJECT_ROOT}|g" \
+      "$target/CLAUDE.md" \
+      "$target/.claude/settings.json"
+  done
+
+  # 5) Scaffold messages/old per role.
+  for role in "${ROLES[@]}"; do
+    mkdir -p "$SCRIPT_DIR/messages/$role" "$SCRIPT_DIR/old/$role"
+    [[ -f "$SCRIPT_DIR/messages/$role/.gitkeep" ]] || touch "$SCRIPT_DIR/messages/$role/.gitkeep"
+    [[ -f "$SCRIPT_DIR/old/$role/.gitkeep" ]] || touch "$SCRIPT_DIR/old/$role/.gitkeep"
+  done
+
+  echo
+  echo "✓ Init complete. Next steps:"
+  echo "  1. Review CLAUDE.md in each worktree (templates are starting points)"
+  echo "  2. $(basename "$SCRIPT_DIR")/agents up"
+  echo "  3. PM 과 대화로 프로젝트별 도메인 / 특수 규칙을 CLAUDE.md 에 추가"
+}
+
+CMD="${1:-}"
+case "$CMD" in
+  up)     cmd_up ;;
+  down)   cmd_down ;;
+  status) cmd_status ;;
+  attach) cmd_attach "${2:-}" ;;
+  init)   cmd_init ;;
+  ""|-h|--help|help)
+    cat <<USAGE
+agents — multi-agent tmux orchestrator (PROJECT=$PROJECT, roles: ${ROLES[*]})
+
+Usage:
+  agents up                  start sessions, attach to $ATTACH_TARGET
+  agents down                kill all sessions
+  agents status              show each session state + last 5 lines
+  agents attach [role]       attach to a specific role
+  agents init                (new project) clone REPO_URL per role + scaffold
+
+Standard roles: pm | back | front | review (extend by adding example templates).
+Sessions: ${PROJECT}-{${ROLES[*]// /,}}
+USAGE
+    ;;
+  *)
+    echo "agents: unknown command '$CMD' (try 'agents --help')" >&2
+    exit 1
+    ;;
+esac
