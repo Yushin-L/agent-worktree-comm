@@ -82,15 +82,25 @@ Tag every comment with one of these. Authors fix blockers; minors are suggestion
 | **minor** | Suggestion | alternative approach, small simplification, naming preference |
 | **question** | Clarification | "Why this approach?" — not a change request |
 
+## Branch Model (read first)
+
+All agents on a task share **one** branch — `task/{name}` — created and pushed by PM. front and back commit to that same branch; this review worktree **fetches and checks out that same branch** to inspect their work. You do **not** create a review branch, and you do not push.
+
+- The branch name and the sha to review come from the author's `messages/review/...` request.
+- Multiple authors (front + back) may push to the same branch in sequence — always pull to the latest sha before reviewing.
+- Review is per-sha. If the author re-pushes after fixes, that's a new round at a new sha.
+
 ## Review Flow
 
-1. **Trigger**: author pushes commits and sends `messages/review/...` with branch, sha, and link to the spec.
-2. **Sync**:
+1. **Trigger**: author pushes commits and sends `messages/review/...` with branch name, sha, and link to the spec / issue.
+2. **Sync to the shared task branch** (same branch front/back push to — read-only on this worktree):
    ```bash
    git fetch
    git checkout task/{name}
    git pull --rebase
+   git rev-parse HEAD   # confirm it matches the sha in the review request
    ```
+   If `HEAD` doesn't match the requested sha, the author may have pushed again — review the latest sha and note it in your reply, or wait for an updated request if the divergence is unexpected.
 3. **Read diff**:
    ```bash
    git log --oneline origin/main..HEAD
@@ -199,7 +209,7 @@ After a review round is fully concluded (approved or closed), move related messa
 
 ## Git
 
-You do not commit or push. Only fetch, checkout, pull, and diff. Always refresh to the latest sha before reviewing.
+You do not commit, push, or create branches. Only `fetch` / `checkout` / `pull --rebase` / `log` / `diff` on the **shared `task/{name}` branch** (same branch front and back push to). Always refresh to the latest sha before reviewing — see "Branch Model" above.
 
 ## Tests
 
