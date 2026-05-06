@@ -71,12 +71,49 @@ For each instance's tool / command permissions (`.claude/settings.json` patterns
 
 Each worktree is an independent clone but all push to the same remote. Same-task agents share **the same branch**.
 
+#### Canonical Task Flow (end-to-end)
+
+One task = one issue = one branch = **one PR**. Every task follows this sequence; deviations require explicit PM call-out in the issue.
+
+```
+PM: 이슈 작성 + 브랜치 생성·push + task 브랜치 체크아웃 유지 + back/front 핑 (메시지 파일)
+  ↓
+back: pull → 작업 → push → 핑 (front if needed / review / pm)
+  ↓                                          ↘
+front: pull → 작업 → push → 핑 (back if needed / review / pm)
+  ↓                                          ↘
+PM: pull --ff-only (누적 흡수) → diff 검토 → 의견·결정 메시지 (필요 시)
+  ↓
+review: 누적된 sha 전체 검토 → blocker/major 피드백 또는 approved → pm 핑
+  ↓
+PM: 한 PR 생성 (gh pr create, 본문에 Closes #issue) → 메시지 아카이브 → task 브랜치에서 대기
+  ↓
+사람: 테스트 → 머지 + 브랜치 삭제 → PM 에 머지 완료 알림
+  ↓
+PM: main 으로 복귀
+```
+
+**한 브랜치 = 한 PR.** backend / frontend 가 같은 task 면 같은 브랜치에 누적되고, **PR 도 하나로 묶인다**. 분리 PR (backend PR + frontend PR) 은 명시 예외 케이스 (예: API contract 를 frontend 가 소비하기 전 backend pre-publish 가 필요한 경우) 가 아니면 금지. 분리하고 싶으면 task 자체를 두 이슈로 쪼개고 두 브랜치를 만든 다음 시작했어야 한다 — 작업 도중에 갈라치기 하지 않는다.
+
+front / back 이 "PR 두 개 만들까요?" 라고 PM 에게 묻는 일이 없도록 한다. 같은 브랜치 위에 작업했으면 자동으로 한 PR 이다.
+
+**PM 의 워크트리 위치**: PM 은 task 시작 시 task 브랜치를 체크아웃한 뒤 **사람이 PR 을 머지했다고 확인할 때까지** 그 브랜치에 머무른다. main 으로 돌아오는 시점은 머지 완료 확인 직후 한 번뿐. 이유: (1) PM 의 메시지·결정·리뷰 의견은 PR 에 실제로 들어갈 코드를 봐야 의미가 있고 main 에 앉아 있으면 누적 변경이 working tree 에 반영되지 않아 의견 형성이 둔해진다. (2) PR 오픈 후에도 사람이 이 워크트리에서 직접 테스트하는 경우가 있어 task 브랜치 working tree 가 그대로 유지되어야 한다. front/back push 알림이 오면 `git pull --ff-only` 로 흡수 (PR 후 review-driven follow-up 커밋 포함).
+
 #### Branch Rules
 
 - New task → new branch (`task/{name}` or project convention)
 - All agents working on the same task share the same branch
 - No force push (shared branch)
 - Rebase **locally only**
+
+#### Long-lived Deploy Branches (`deploy/*`)
+
+Deploy branches (`deploy/airgap`, `deploy/*`) are long-lived and shared across teams. They periodically need to absorb `main` changes via rebase, which usually requires force-push. The roles are:
+
+- **PM**: dry-run rebase / `fetch` / `log` / `diff` for conflict-area analysis is OK (read-only mechanics). **Conflict resolution + force-push is a handoff** — PM does not perform either.
+- **Handoff target**: the agent owning the file footprint where conflicts concentrate. Backend-heavy → `back`. Frontend-heavy → `front`. If both are hit, the larger-footprint side leads and pings the other when they reach the smaller footprint.
+- **Force-push permission**: must be explicit in the message (e.g. `force-push 권한 위임: deploy/airgap rebase 후 origin 업데이트`).
+- **Tracking**: deploy-branch rebases tied to a specific main-side merge should be referenced in the corresponding deploy issue (e.g. `#93` for airgap), not a new task issue.
 
 #### Starting (PM-driven)
 
@@ -265,8 +302,17 @@ Each worktree's Claude Code instance operates under the assumption that it is an
 
 - **The session TUI's stdout is a log**, not a communication channel. Writing "Which option do you prefer?" to tmux will not reach PM or other agents.
 - **All questions, design choices, blockers, and intermediate reports are written as `messages/{recipient}/` files.** This is the only communication path.
+- **"ping" = message file creation.** Wherever this doc (or any agent CLAUDE.md) says "ping the recipient", create a file at `messages/{recipient}/{date}-{sender}-{topic}.md`. The word is shorthand, not a separate action.
 - For decisions that don't need an immediate answer, **proceed with a sensible default** and log the rationale in a message or GitHub issue comment. Holding choices open and waiting stalls the entire pipeline.
 - **Completion / push / error notifications follow the same path** — via `messages/{recipient}/`.
+
+### Decision tree — when you want to ask another agent something
+
+1. **Blocking** (cannot proceed without an answer) → write the message file, wait for response.
+2. **Pre-authorized** (PM / spec already greenlit this) → just proceed, report result via message. "Let me double-check first" written to console and idling is neither — it is the **worst option**.
+3. **Non-blocking but rationale non-obvious** → proceed with sensible default, log rationale in a message or issue comment.
+
+If you catch yourself writing a question or status to the console addressed to another agent, **stop and move that text into a message file**.
 
 ### Self-Check Checklist
 
@@ -445,3 +491,4 @@ re:                         # (optional) related issues / APIs / messages
 - **reviewer notifies PM of approval**: `messages/pm/2026-04-23-review-quota-api-approved.md`
 - **PM creates the PR** (human merges) → archive related messages to `old/{recipient}/`
 - **Merge-freeze announcement** (urgent broadcast): copy the same content into `messages/front/`, `messages/back/`, `messages/review/`
+- **PM hands off deploy-branch rebase to back** (after dry-run conflict analysis): `messages/back/2026-04-28-pm-airgap-rebase-handoff.md` — issue link (`#93`), conflict-area summary (e.g. "PR #96 rename 흡수, conflict 집중: `cmd/server/main.go`, `internal/middleware/`, `internal/drive/store.go`"), explicit force-push permission, "frontend conflict 만나면 front 핑" 단서, 완료 시 `messages/pm/` 보고 요청.

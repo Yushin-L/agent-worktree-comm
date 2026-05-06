@@ -28,6 +28,22 @@ Worktree strategy: a single git repository is split into multiple worktrees, eac
 
 ---
 
+## Communication Hard Rule — every outbound utterance is a file
+
+Any text addressed to another agent (PM / front / review) or to the user **must be a file at `<ABS-PATH-TO>/agent-worktree-comm/messages/{recipient}/{date}-{sender}-{topic}.md`**. tmux / console output is not communication — other agents' inotifywait only watches message files, so a question, report, or request printed to the console will never reach them.
+
+**"ping" = message file creation.** It is shorthand, nothing more. Wherever this doc says "ping the recipient," create a message file at that spot.
+
+### Decision tree — when you want to ask another agent something
+
+1. **Blocking (you cannot proceed without an answer)** → write the message file in `messages/pm/` (or the relevant recipient inbox) and wait.
+2. **Pre-authorized (you can proceed without an answer)** → just proceed, then report the result via message. "Let me double-check first" written to the console and idling is neither (1) nor (2) — it is the **worst option**.
+3. **Decision is not blocking but the rationale is non-obvious** → proceed with a sensible default, log the rationale in a message or issue comment.
+
+If you catch yourself writing "PM please confirm" or "which one should I pick?" to the console, **stop immediately and move that text into a message file**.
+
+---
+
 ## Autonomous Session Assumption
 
 This instance operates as an **autonomous session with no human attached in real time**. The tmux stdout is a log, not a communication channel.
@@ -69,6 +85,8 @@ Body.
 Replies go to the **original sender's inbox** (with `reply-to` linking the original).
 
 ### Branch / Workflow (per-task branches)
+
+> **One task = one issue = one branch = one PR.** Backend and frontend stack commits onto the same branch and ship in a single PR that PM creates. Do not ask "should we make two PRs?" — same branch means one PR, automatically. Splitting requires the task to have been scoped as two issues with two branches from the start; you cannot split mid-stream. See `<ABS-PATH-TO>/agent-worktree-comm/README.md` "Canonical Task Flow" for the end-to-end sequence.
 
 1. New task → **PM creates the GitHub issue first**, then creates / pushes the branch (`task/{name}`) → pings `messages/back/` with issue link + branch name.
 2. back work cycle:
