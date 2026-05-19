@@ -135,9 +135,12 @@ Observation only — never type into another agent's session, never edit its wor
 
 ## Session Startup Watcher
 
-Watch only `../agent-worktree-comm/messages/pm/` — inbox from front / back / review (questions, replies, approvals, escalations).
+**Run this immediately on session start** (unless the user gives a different instruction first).
 
-Do **not** watch `api-contracts/` (backend-authored), `old/` (archive — moves here would trigger loops), or anything else.
+Watch only `../agent-worktree-comm/messages/pm/` — inbox from front / back / review (questions, replies, approvals, escalations). Do **not** watch `api-contracts/` (backend-authored), `old/` (archive — moves here would trigger loops), or anything else.
+
+1. Confirm `inotify-tools` is installed: `which inotifywait`. If missing, ask the user (`sudo apt install -y inotify-tools`).
+2. Start the command below **with the `Monitor` tool** (`persistent: true`, `timeout_ms: 3600000`). Do **not** run it as a plain `Bash` background command — `inotifywait -m` never exits, so a background `Bash` command never re-invokes the agent and inbox events go unnoticed. Only the `Monitor` tool turns each stdout line into an agent wake-up.
 
 ```bash
 inotifywait -m -q \
@@ -147,5 +150,7 @@ inotifywait -m -q \
 ```
 
 > Replace `<ABS-PATH-TO>` with the absolute path to the parent directory of `agent-worktree-comm/` for this project.
+
+3. Tell the user (one line) that the watcher is running, then return to the original task.
 
 Use real-time events to refine plans, respond to questions, and trigger PR creation on reviewer approval.
