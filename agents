@@ -40,6 +40,7 @@ source "$CONFIG"
 : "${CLAUDE_CMD:=claude}"
 : "${BOOT_READY_TIMEOUT:=30}"           # max seconds to poll for claude's TUI becoming input-ready
 : "${BOOT_READY_MARKER:=for shortcuts}" # pane substring signalling the main input UI is rendered
+: "${BOOT_TRUST_MARKER:=trust this folder}" # first-run trust dialog substring; Enter accepts it (cursor defaults to "Yes, I trust")
 # ASCII probe used to confirm the bootstrap prompt actually landed in the composer.
 # Derived from the longest ASCII run in BOOTSTRAP_PROMPT; empty ⇒ verification is skipped.
 : "${BOOT_PROBE:=$(printf '%s' "$BOOTSTRAP_PROMPT" | grep -oE '[A-Za-z][A-Za-z ]{6,}' | head -1 || true)}"
@@ -66,9 +67,22 @@ wait_until_ready() {
   local session="$1"
   sleep "$BOOT_SLEEP"                     # brief floor before the pane is worth reading
   local deadline=$(( SECONDS + BOOT_READY_TIMEOUT ))
+  local trusted=0
+  local pane
   while (( SECONDS <= deadline )); do
-    if tmux capture-pane -pt "$session" 2>/dev/null | grep -qF "$BOOT_READY_MARKER"; then
+    pane="$(tmux capture-pane -pt "$session" 2>/dev/null || true)"
+    if grep -qF "$BOOT_READY_MARKER" <<<"$pane"; then
       return 0
+    fi
+    # First-run "Do you trust the files in this folder?" dialog gates the input
+    # UI, so the ready marker never appears and the bootstrap would fail. Accept
+    # it once (cursor defaults to "Yes, I trust"), persisting trust for future
+    # runs, then keep polling for the real input UI.
+    if (( trusted == 0 )) && [[ -n "$BOOT_TRUST_MARKER" ]] && grep -qF "$BOOT_TRUST_MARKER" <<<"$pane"; then
+      tmux send-keys -t "$session" Enter
+      trusted=1
+      sleep 0.5
+      continue
     fi
     sleep 0.5
   done

@@ -19,6 +19,12 @@
 #                    slow/first-run boots (e.g. many MCP servers initializing).
 #   BOOT_READY_MARKER   pane substring that signals the input UI is rendered;
 #                    default "for shortcuts".
+#   BOOT_TRUST_MARKER   pane substring of claude's first-run "trust this folder"
+#                    dialog; when seen while waiting for readiness the script
+#                    presses Enter to accept it (cursor defaults to "Yes, I
+#                    trust"), so the first `agents up` on fresh worktrees works
+#                    and trust is persisted. Default "trust this folder";
+#                    empty ⇒ auto-accept disabled.
 #   BOOT_PROBE       ASCII substring used to confirm the bootstrap prompt landed
 #                    in the composer; default = longest ASCII run in
 #                    BOOTSTRAP_PROMPT. Set explicitly if your prompt is
