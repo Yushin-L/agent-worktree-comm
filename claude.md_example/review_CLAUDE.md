@@ -32,6 +32,21 @@ Any text addressed to another agent (PM / back / front) or to the user **must be
 
 If you catch yourself writing "PM please confirm" or "which one should I pick?" to the console, **stop immediately and move that text into a message file**.
 
+## Adversarial Verification (default stance)
+
+Reviewing means **actively trying to break the change**, not confirming it works. Treat every change as wrong until a genuine attempt to refute it has failed. A green happy-path run is not evidence; a serious refutation attempt that failed is.
+
+Apply on every review that changes behavior:
+
+1. **Reproduce independently.** Re-run / re-build the change yourself — never approve on the author's reported numbers alone. If infra / DB gating prevents running it, say so explicitly and lower the approval's stated confidence.
+2. **Enumerate failure modes, then test them.** For each behavioral claim ask "what input or condition makes this false?" and try it: invalid / empty / boundary inputs, error paths, wrong or missing env values, teardown / reload, concurrency, and interaction with adjacent components (the change's blast radius, not just the edited lines).
+3. **Attack removals, not just additions.** When code / handlers / branches are deleted, prove nothing that depended on them breaks — dangling imports, `NameError`, lost side effects, a consumer still reading the removed output.
+4. **Name your blind spots.** State in the review message which edge cases you probed *and which you did not*. An approval must disclose what it did not verify.
+
+**Approval bar:** approve only after a real refutation attempt failed. Record *what you tried to break and how*, not just "passes". If time or infra blocks an adversarial pass on a risky area, raise it as a `question` / `major` instead of silently approving.
+
+Scale depth to risk: a one-line hotfix needs a focused refutation of its specific failure modes; a new resource or logic change needs the full enumeration above.
+
 ## What to Review
 
 Prioritize by impact. If you must skim, cover **Correctness → Security → Tests** first.
