@@ -12,8 +12,17 @@
 # Optional (with defaults if unset):
 #   SEPARATOR        between repo name and role; default "_"
 #   ATTACH_TARGET    role to attach to on `agents up`; default "pm"
-#   BOOT_SLEEP       seconds to wait after launching claude before sending the
-#                    bootstrap prompt; default 2
+#   BOOT_SLEEP       initial grace (seconds) before polling the pane for
+#                    readiness; default 2. No longer the sole gate — see below.
+#   BOOT_READY_TIMEOUT  max seconds to poll for claude's TUI to accept input
+#                    before injecting the prompt anyway; default 30. Raise on
+#                    slow/first-run boots (e.g. many MCP servers initializing).
+#   BOOT_READY_MARKER   pane substring that signals the input UI is rendered;
+#                    default "for shortcuts".
+#   BOOT_PROBE       ASCII substring used to confirm the bootstrap prompt landed
+#                    in the composer; default = longest ASCII run in
+#                    BOOTSTRAP_PROMPT. Set explicitly if your prompt is
+#                    all-non-ASCII (empty ⇒ post-send verification is skipped).
 #   BOOTSTRAP_PROMPT first text sent to each session after claude boots
 #   CLAUDE_CMD       command launched in each tmux session; default "claude"
 #                    (e.g. "claude --continue" to resume the previous conversation)

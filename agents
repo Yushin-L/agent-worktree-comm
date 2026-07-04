@@ -38,6 +38,11 @@ source "$CONFIG"
 : "${BOOT_SLEEP:=2}"
 : "${SEPARATOR:=_}"
 : "${CLAUDE_CMD:=claude}"
+: "${BOOT_READY_TIMEOUT:=30}"           # max seconds to poll for claude's TUI becoming input-ready
+: "${BOOT_READY_MARKER:=for shortcuts}" # pane substring signalling the main input UI is rendered
+# ASCII probe used to confirm the bootstrap prompt actually landed in the composer.
+# Derived from the longest ASCII run in BOOTSTRAP_PROMPT; empty ⇒ verification is skipped.
+: "${BOOT_PROBE:=$(printf '%s' "$BOOTSTRAP_PROMPT" | grep -oE '[A-Za-z][A-Za-z ]{6,}' | head -1 || true)}"
 
 # Default worktree resolver: derive directory name from REPO_URL.
 # Override worktree_dir() in .agents.sh for irregular layouts (e.g. legacy projects).
@@ -54,6 +59,30 @@ fi
 
 session_name() { echo "${PROJECT}-$1"; }
 
+# Poll the target pane until claude's input UI is rendered. A fixed sleep races
+# the boot sequence (MCP init, first-run dialogs) and silently drops the
+# bootstrap send-keys; polling for the ready marker eliminates that race.
+wait_until_ready() {
+  local session="$1"
+  sleep "$BOOT_SLEEP"                     # brief floor before the pane is worth reading
+  local deadline=$(( SECONDS + BOOT_READY_TIMEOUT ))
+  while (( SECONDS <= deadline )); do
+    if tmux capture-pane -pt "$session" 2>/dev/null | grep -qF "$BOOT_READY_MARKER"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# Best-effort confirmation that the just-typed prompt is sitting in the composer.
+# Returns success (skips verification) when no ASCII probe could be derived.
+prompt_registered() {
+  local session="$1"
+  [[ -n "$BOOT_PROBE" ]] || return 0
+  tmux capture-pane -pt "$session" 2>/dev/null | grep -qF "$BOOT_PROBE"
+}
+
 start_role() {
   local role="$1"
   local session; session="$(session_name "$role")"
@@ -68,9 +97,34 @@ start_role() {
     return 1
   fi
   tmux new-session -d -s "$session" -c "$dir" "$CLAUDE_CMD"
-  sleep "$BOOT_SLEEP"
-  tmux send-keys -t "$session" "$BOOTSTRAP_PROMPT" Enter
-  echo "[$session] up"
+
+  if ! wait_until_ready "$session"; then
+    echo "[$session] WARNING: TUI not input-ready after ${BOOT_READY_TIMEOUT}s — attempting bootstrap anyway" >&2
+  fi
+
+  # Inject the bootstrap prompt with -l (literal, so no character is read as a
+  # key name), verify it registered, and retry once if the keystrokes were lost.
+  local attempt sent=0
+  for attempt in 1 2; do
+    if (( attempt > 1 )); then
+      tmux send-keys -t "$session" C-u     # clear any partial text before retrying
+      sleep 0.2
+    fi
+    tmux send-keys -t "$session" -l "$BOOTSTRAP_PROMPT"
+    sleep 0.5
+    if prompt_registered "$session"; then
+      tmux send-keys -t "$session" Enter
+      sent=1
+      echo "[$session] up (bootstrap registered, attempt $attempt)"
+      break
+    fi
+    echo "[$session] bootstrap keystrokes not registered (attempt $attempt/2)" >&2
+    sleep 1
+  done
+  if (( sent == 0 )); then
+    echo "[$session] ERROR: bootstrap prompt failed after 2 attempts — start the watcher manually in this session" >&2
+    return 1
+  fi
 }
 
 kill_role() {
