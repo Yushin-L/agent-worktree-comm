@@ -25,6 +25,11 @@
 #                    trust"), so the first `agents up` on fresh worktrees works
 #                    and trust is persisted. Default "trust this folder";
 #                    empty ⇒ auto-accept disabled.
+#   BOOT_TRUST_NO_MARKER  regex matching the trust dialog when its cursor sits
+#                    on "No, exit" (newer Claude Code defaults there when
+#                    .claude/settings.json pre-approves permissions). When it
+#                    matches, the script presses Down before Enter so "Yes, I
+#                    trust" is selected. Default "❯[[:space:]]*No, exit".
 #   BOOT_PROBE       ASCII substring used to confirm the bootstrap prompt landed
 #                    in the composer; default = longest ASCII run in
 #                    BOOTSTRAP_PROMPT. Set explicitly if your prompt is
