@@ -10,6 +10,12 @@
 #   REPO_URL         git URL cloned by `agents init` for each role
 #
 # Optional (with defaults if unset):
+#   DEFAULT_AGENT_ENGINE  fallback engine for roles; claude (default) or codex
+#   AGENT_ENGINES    associative role-to-engine map, e.g.
+#                    declare -A AGENT_ENGINES=([pm]=codex [back]=claude)
+#   EXTERNAL_WATCHER run the portable orchestrator-owned inbox watcher; default false
+#   WATCH_POLL_INTERVAL  watcher polling interval in seconds; default 1
+#   NO_ATTACH        start sessions without attaching after `up`; default false
 #   SEPARATOR        between repo name and role; default "_"
 #   ATTACH_TARGET    role to attach to on `agents up`; default "pm"
 #   BOOT_SLEEP       initial grace (seconds) before polling the pane for
@@ -18,7 +24,9 @@
 #                    before injecting the prompt anyway; default 30. Raise on
 #                    slow/first-run boots (e.g. many MCP servers initializing).
 #   BOOT_READY_MARKER   pane substring that signals the input UI is rendered;
-#                    default "for shortcuts".
+#                    default "❯" for Claude Code.
+#   CODEX_READY_MARKER  Codex TUI input marker; default "› Ask Codex".
+#   CODEX_TRUST_MARKER  Codex first-run trust dialog substring; accepted automatically.
 #   BOOT_TRUST_MARKER   pane substring of claude's first-run "trust this folder"
 #                    dialog; when seen while waiting for readiness the script
 #                    presses Enter to accept it (cursor defaults to "Yes, I
@@ -37,6 +45,8 @@
 #   BOOTSTRAP_PROMPT first text sent to each session after claude boots
 #   CLAUDE_CMD       command launched in each tmux session; default "claude"
 #                    (e.g. "claude --continue" to resume the previous conversation)
+#   CODEX_CMD        command for Codex roles; defaults to an interactive,
+#                    workspace-write session with the comm directory added.
 #
 # For irregular worktree layouts, override the resolver:
 #   worktree_dir() {
@@ -50,3 +60,7 @@ PROJECT=myproject
 ROLES=(pm back front review)
 REPO_URL=https://github.com/owner/repo.git
 ATTACH_TARGET=pm
+
+# Mixed-engine example:
+# declare -A AGENT_ENGINES=([pm]=codex [back]=claude [front]=claude [review]=codex)
+# EXTERNAL_WATCHER=true

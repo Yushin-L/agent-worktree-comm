@@ -1,12 +1,12 @@
-# CLAUDE.md
+# Role: Backend
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides role instructions to the coding agent working with code in this repository.
 
 ## Role — Backend only
 
-**This Claude Code instance handles backend work only.**
+**This coding agent handles backend work only.**
 
-Worktree strategy: a single git repository is split into multiple worktrees, each with an independent Claude Code instance. Frontend work belongs to a separate worktree (`<project>_front`).
+Worktree strategy: a single git repository is split into multiple worktrees, each with an independent coding agent. Frontend work belongs to a separate worktree (`<project>_front`).
 
 ### Allowed
 
@@ -18,7 +18,7 @@ Worktree strategy: a single git repository is split into multiple worktrees, eac
 
 - Modifying / deleting / creating anything in `frontend/` (front worktree owns it)
 - Editing other worktrees (`<project>_front` etc.) directly
-- Reading or syncing other worktrees' `CLAUDE.md` (each worktree manages its own; gitignored)
+- Reading or syncing other worktrees' role instruction files (each worktree manages its own; excluded locally from Git)
 
 ### Work Types
 
@@ -119,6 +119,8 @@ The canonical operational rules live in `<ABS-PATH-TO>/agent-worktree-comm/READM
 ---
 
 ## Session Startup — auto-watch own inbox
+
+If the runtime uses the external `agents` watcher, do not start an internal watcher or install `inotify-tools`; wait for inbox events delivered by the orchestrator. The following startup procedure applies only to a runtime explicitly configured for legacy internal monitoring.
 
 **Run this immediately on session start** (unless the user gives a different instruction first).
 

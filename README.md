@@ -2,9 +2,20 @@
 
 ## What is this directory
 
-A directory for **real-time communication** between Claude Code instances across worktrees. The permanent record (plans, issues, decisions) lives in GitHub issues as the single source of truth (SSOT); this directory is the local channel for in-flight tasks.
+A directory for **real-time communication** between coding agents across worktrees. The permanent record (plans, issues, decisions) lives in GitHub issues as the single source of truth (SSOT); this directory is the local channel for in-flight tasks.
 
-This project splits a single git repository into **multiple worktrees (independent clones)**, attaching an independent Claude Code instance to each. Each instance focuses on its own role (front, back, pm, review) and shares context through this directory.
+This project splits a single git repository into **multiple worktrees (independent clones)**, attaching a configured coding agent to each. Each instance focuses on its own role (front, back, pm, review) and shares context through this directory.
+
+## Shared Role Templates
+
+Role instructions live in `role_templates/<role>.md`: `pm.md`, `back.md`, `front.md`, and `review.md`. These are shared source templates; `agents init` generates the instruction file expected by each role's configured harness:
+
+| Configured engine | Generated instructions | Runtime settings |
+|-------------------|------------------------|------------------|
+| Claude Code (`claude`) | `CLAUDE.md` | `setting_example/<role>_settings.json` → `.claude/settings.json` |
+| Codex (`codex`) | `AGENTS.md` | Orchestrator's `CODEX_CMD`; Claude settings are not applied |
+
+Configure roles and engines in `.agents.sh`. The current runtime supports Claude Code and Codex; additional harnesses require launch and initialization support in `agents`. See `README.human.md` for setup.
 
 ## Worktree Strategy
 
@@ -13,6 +24,8 @@ This project splits a single git repository into **multiple worktrees (independe
 ```
 <repo-shared-parent>/
 ├── agent-worktree-comm/                    ← shared comm docs (outside any git worktree)
+│   ├── role_templates/                     ← shared role instruction sources
+│   ├── setting_example/                    ← Claude-specific permission templates
 │   ├── api-contracts/                      ← API specs (paired with code)
 │   ├── messages/                           ← directed messages (per-recipient inbox)
 │   │   ├── front/
@@ -26,22 +39,22 @@ This project splits a single git repository into **multiple worktrees (independe
 │       └── review/
 │
 ├── <project>_front/                        ← frontend worktree
-│   └── CLAUDE.md
+│   └── CLAUDE.md or AGENTS.md
 │
 ├── <project>_back/                         ← backend worktree
-│   └── CLAUDE.md
+│   └── CLAUDE.md or AGENTS.md
 │
 ├── <project>_prom/                         ← PM (Product Manager) worktree
-│   └── CLAUDE.md
+│   └── CLAUDE.md or AGENTS.md
 │
 └── <project>_review/                       ← Reviewer worktree
-    └── CLAUDE.md
+    └── CLAUDE.md or AGENTS.md
 ```
 
 ### Core Principles
 
-1. **Role separation**: each worktree's `CLAUDE.md` constrains its role. front owns `frontend/`, back owns server code, pm/review handle docs/review only.
-2. **CLAUDE.md is gitignored**: managed independently per worktree.
+1. **Role separation**: each worktree's `CLAUDE.md` or `AGENTS.md` constrains its role. front owns `frontend/`, back owns server code, pm/review handle docs/review only.
+2. **Role instructions stay local**: `agents init` excludes the generated `CLAUDE.md` or `AGENTS.md` through the clone's `.git/info/exclude`.
 3. **Build/deploy/test via Docker**: never run language-native tests on the host. See "Test Execution Rule".
 4. **Communication via this directory**: no direct cross-worktree file edits.
 5. **Directed-first**: any message with a specific recipient goes to `messages/{recipient}/`. Broadcasts are rare; copy into multiple inboxes when needed.
@@ -61,9 +74,9 @@ For each instance's tool / command permissions (`.claude/settings.json` patterns
 ### Adding a New Worktree
 
 1. Create the new worktree under `<repo-shared-parent>/` (independent clone).
-2. Author a role-appropriate `CLAUDE.md` for that worktree.
-3. Reference the `agent-worktree-comm/` path in the new `CLAUDE.md`.
-4. Include the session-start auto-watcher (own inbox only).
+2. Add `role_templates/{new-role}.md`; for a Claude role, also add `setting_example/{new-role}_settings.json`.
+3. Configure the role and engine in `.agents.sh`. On a fresh setup, `agents init` generates `CLAUDE.md` or `AGENTS.md` and resolves the shared directory path.
+4. Use `EXTERNAL_WATCHER=true` for orchestrator-owned inbox monitoring.
 5. Add `messages/{new-role}/` and `old/{new-role}/` directories.
 6. Update the role table and structure diagram in this README.
 
@@ -167,7 +180,7 @@ Reviewer approval is **required** before PR merge.
 4. On pass, Reviewer sends `approved: task/{name} @ {sha}` to `messages/pm/`.
 5. PM does not create the PR without approval. (The actual merge is performed by a human.)
 
-Details: see `<project>_review/CLAUDE.md`.
+Details: see the review worktree's role instructions (`CLAUDE.md` or `AGENTS.md`), generated from `role_templates/review.md`.
 
 #### Closing
 
@@ -302,7 +315,7 @@ Each worktree's Claude Code instance operates under the assumption that it is an
 
 - **The session TUI's stdout is a log**, not a communication channel. Writing "Which option do you prefer?" to tmux will not reach PM or other agents.
 - **All questions, design choices, blockers, and intermediate reports are written as `messages/{recipient}/` files.** This is the only communication path.
-- **"ping" = message file creation.** Wherever this doc (or any agent CLAUDE.md) says "ping the recipient", create a file at `messages/{recipient}/{date}-{sender}-{topic}.md`. The word is shorthand, not a separate action.
+- **"ping" = message file creation.** Wherever this doc (or any agent's role instructions) says "ping the recipient", create a file at `messages/{recipient}/{date}-{sender}-{topic}.md`. The word is shorthand, not a separate action.
 - For decisions that don't need an immediate answer, **proceed with a sensible default** and log the rationale in a message or GitHub issue comment. Holding choices open and waiting stalls the entire pipeline.
 - **Completion / push / error notifications follow the same path** — via `messages/{recipient}/`.
 
@@ -327,11 +340,11 @@ Ask yourself during and at the end of work:
 
 On session start, each worktree watches **its own inbox only** in real time. The simpler the structure, the simpler the watch target.
 
-### Prerequisite
+### External Watcher (Mixed Engines)
 
-```bash
-sudo apt install -y inotify-tools
-```
+Set `EXTERNAL_WATCHER=true` in `.agents.sh`. `agents up` starts a separate `inbox-watch` tmux window for each role. The watcher polls message files and delivers their paths to the agent's input pane. This mode requires no `inotify-tools` and agents must not start an internal watcher.
+
+The commands below apply only to the legacy Claude internal monitoring mode with the external watcher disabled. That mode requires `inotify-tools`.
 
 ### Watch Target per Agent
 
@@ -348,7 +361,7 @@ sudo apt install -y inotify-tools
 
 **`old/` is not watched.** Archive moves must not generate inotify events.
 
-### Watch Commands
+### Legacy Internal Watch Commands (Claude Only)
 
 Run via Claude Code's `Monitor` tool with `persistent: true`. Replace `<ABS-PATH-TO>` with the absolute path to the parent directory of `agent-worktree-comm/`.
 
@@ -388,7 +401,7 @@ inotifywait -m -q \
 ### Behavior
 
 - One-line event notification on file create / save
-- Claude reads the file and processes it
+- The receiving agent reads the file and processes it
 - Watcher terminates automatically on session end
 - Processed messages move to `old/{self}/` (outside the watch path)
 

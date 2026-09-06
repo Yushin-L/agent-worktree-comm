@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Multi-agent tmux orchestrator for the agent-worktree-comm setup.
+# Mixed-agent tmux orchestrator for the agent-worktree-comm setup.
 #
 # Reads project-specific config from `<this-dir>/.agents.sh` and resolves
 # worktree paths relative to the project root (parent of this script's
@@ -11,13 +11,12 @@
 #   agents status              dump last 5 lines of each session
 #   agents attach [role]       attach to a specific role (default: ATTACH_TARGET)
 #   agents init                (new project) clone REPO_URL per role + copy
-#                              CLAUDE.md / settings.json templates + scaffold
+#                              engine-specific instructions + scaffold
 #                              messages/ and old/ directories.
 #
 # Standard ROLES vocab: pm | back | front | review. Each value must have
-# matching templates at `claude.md_example/<role>_CLAUDE.md` and
-# `setting_example/<role>_settings.json`. Add new roles by adding both
-# templates first.
+# a shared template at `role_templates/<role>.md`. Claude roles also need
+# `setting_example/<role>_settings.json` for runtime permissions.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,16 +36,22 @@ source "$CONFIG"
 : "${ATTACH_TARGET:=pm}"
 : "${BOOT_SLEEP:=2}"
 : "${SEPARATOR:=_}"
+: "${DEFAULT_AGENT_ENGINE:=claude}"
 : "${CLAUDE_CMD:=claude}"
+: "${CODEX_CMD:=codex --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir '$SCRIPT_DIR'}"
+: "${EXTERNAL_WATCHER:=false}"
+: "${WATCH_POLL_INTERVAL:=1}"
+: "${NO_ATTACH:=false}"
 : "${BOOT_READY_TIMEOUT:=30}"           # max seconds to poll for claude's TUI becoming input-ready
 # Composer prompt char — the "? for shortcuts" footer was removed in newer
 # Claude Code TUIs (≥2.1.x), so match the input-line marker instead.
 : "${BOOT_READY_MARKER:=❯}"             # pane substring signalling the main input UI is rendered
+: "${CODEX_READY_MARKER:=› Ask Codex}"  # Codex TUI composer marker
+: "${CODEX_TRUST_MARKER:=Do you trust the contents of this directory?}"
 : "${BOOT_TRUST_MARKER:=trust this folder}" # first-run trust dialog substring; script accepts it
 : "${BOOT_TRUST_NO_MARKER:=❯[[:space:]]*No, exit}" # regex: cursor sitting on the "No, exit" option ⇒ press Down before Enter
-# ASCII probe used to confirm the bootstrap prompt actually landed in the composer.
-# Derived from the longest ASCII run in BOOTSTRAP_PROMPT; empty ⇒ verification is skipped.
-: "${BOOT_PROBE:=$(printf '%s' "$BOOTSTRAP_PROMPT" | grep -oE '[A-Za-z][A-Za-z ]{6,}' | head -1 || true)}"
+# Optional ASCII probe used to confirm the bootstrap prompt landed in the composer.
+# When unset, it is derived separately from each engine's bootstrap prompt.
 
 # Default worktree resolver: derive directory name from REPO_URL.
 # Override worktree_dir() in .agents.sh for irregular layouts (e.g. legacy projects).
@@ -63,22 +68,61 @@ fi
 
 session_name() { echo "${PROJECT}-$1"; }
 
+engine_for_role() {
+  local role="$1"
+  local engine="$DEFAULT_AGENT_ENGINE"
+  if declare -p AGENT_ENGINES >/dev/null 2>&1; then
+    engine="${AGENT_ENGINES[$role]:-$engine}"
+  fi
+  case "$engine" in
+    claude|codex) echo "$engine" ;;
+    *) echo "agents: unsupported engine '$engine' for role '$role'" >&2; return 1 ;;
+  esac
+}
+
+command_for_engine() {
+  case "$1" in
+    claude) echo "$CLAUDE_CMD" ;;
+    codex)  echo "$CODEX_CMD" ;;
+  esac
+}
+
+bootstrap_for_engine() {
+  local engine="$1"
+  if [[ "$EXTERNAL_WATCHER" == "true" ]]; then
+    echo "외부 agents watcher가 inbox 파일 이벤트를 이 세션에 전달한다. 내부 Monitor/inotify watcher는 시작하지 말고, 역할 지침을 읽은 뒤 준비 상태로 대기해줘."
+  elif [[ "$engine" == "codex" ]]; then
+    echo "AGENTS.md의 역할 지침을 읽어줘. inbox 이벤트는 외부 오케스트레이터가 전달할 때 처리해."
+  else
+    echo "$BOOTSTRAP_PROMPT"
+  fi
+}
+
 # Poll the target pane until claude's input UI is rendered. A fixed sleep races
 # the boot sequence (MCP init, first-run dialogs) and silently drops the
 # bootstrap send-keys; polling for the ready marker eliminates that race.
 wait_until_ready() {
   local session="$1"
+  local engine="$2"
+  local ready_marker="$BOOT_READY_MARKER"
+  [[ "$engine" == "codex" ]] && ready_marker="$CODEX_READY_MARKER"
   sleep "$BOOT_SLEEP"                     # brief floor before the pane is worth reading
   local deadline=$(( SECONDS + BOOT_READY_TIMEOUT ))
   local trusted=0
   local pane
   while (( SECONDS <= deadline )); do
     pane="$(tmux capture-pane -pt "$session" 2>/dev/null || true)"
+    if (( trusted == 0 )) && [[ "$engine" == "codex" ]] && [[ -n "$CODEX_TRUST_MARKER" ]] && grep -qF "$CODEX_TRUST_MARKER" <<<"$pane"; then
+      tmux send-keys -t "$session" Enter
+      trusted=1
+      sleep 0.5
+      continue
+    fi
     # First-run "Do you trust the files in this folder?" dialog gates the input
     # UI and its selection cursor also renders "❯", so it must be handled before
     # the ready-marker check. Accept it once, persisting trust for future runs,
     # then keep polling for the real input UI.
-    if (( trusted == 0 )) && [[ -n "$BOOT_TRUST_MARKER" ]] && grep -qF "$BOOT_TRUST_MARKER" <<<"$pane"; then
+    if [[ "$engine" == "claude" ]] && (( trusted == 0 )) && [[ -n "$BOOT_TRUST_MARKER" ]] && grep -qF "$BOOT_TRUST_MARKER" <<<"$pane"; then
       # Newer Claude Code (when .claude/settings.json pre-approves permissions)
       # places the cursor on "No, exit" by default; Enter there kills the
       # session. Move to the "Yes" line only when the cursor is on "No".
@@ -91,7 +135,7 @@ wait_until_ready() {
       sleep 0.5
       continue
     fi
-    if grep -qF "$BOOT_READY_MARKER" <<<"$pane"; then
+    if grep -qF "$ready_marker" <<<"$pane"; then
       return 0
     fi
     sleep 0.5
@@ -103,14 +147,20 @@ wait_until_ready() {
 # Returns success (skips verification) when no ASCII probe could be derived.
 prompt_registered() {
   local session="$1"
-  [[ -n "$BOOT_PROBE" ]] || return 0
-  tmux capture-pane -pt "$session" 2>/dev/null | grep -qF "$BOOT_PROBE"
+  local probe="$2"
+  [[ -n "$probe" ]] || return 0
+  tmux capture-pane -pt "$session" 2>/dev/null | grep -qF "$probe"
 }
 
 start_role() {
   local role="$1"
   local session; session="$(session_name "$role")"
   local dir="$PROJECT_ROOT/$(worktree_dir "$role")"
+  local engine; engine="$(engine_for_role "$role")"
+  local agent_cmd; agent_cmd="$(command_for_engine "$engine")"
+  local bootstrap; bootstrap="$(bootstrap_for_engine "$engine")"
+  local probe
+  probe="${BOOT_PROBE:-$(printf '%s' "$bootstrap" | grep -oE '[A-Za-z][A-Za-z ]{6,}' | head -1 || true)}"
 
   if tmux has-session -t "$session" 2>/dev/null; then
     echo "[$session] already running — skip"
@@ -120,10 +170,10 @@ start_role() {
     echo "[$session] worktree missing: $dir" >&2
     return 1
   fi
-  tmux new-session -d -s "$session" -c "$dir" "$CLAUDE_CMD"
+  tmux new-session -d -s "$session" -n agent -c "$dir" "$agent_cmd"
 
-  if ! wait_until_ready "$session"; then
-    echo "[$session] WARNING: TUI not input-ready after ${BOOT_READY_TIMEOUT}s — attempting bootstrap anyway" >&2
+  if ! wait_until_ready "$session:agent" "$engine"; then
+    echo "[$session/$engine] WARNING: TUI not input-ready after ${BOOT_READY_TIMEOUT}s — attempting bootstrap anyway" >&2
   fi
 
   # Inject the bootstrap prompt with -l (literal, so no character is read as a
@@ -131,15 +181,15 @@ start_role() {
   local attempt sent=0
   for attempt in 1 2; do
     if (( attempt > 1 )); then
-      tmux send-keys -t "$session" C-u     # clear any partial text before retrying
+      tmux send-keys -t "$session:agent" C-u     # clear any partial text before retrying
       sleep 0.2
     fi
-    tmux send-keys -t "$session" -l "$BOOTSTRAP_PROMPT"
+    tmux send-keys -t "$session:agent" -l "$bootstrap"
     sleep 0.5
-    if prompt_registered "$session"; then
-      tmux send-keys -t "$session" Enter
+    if prompt_registered "$session:agent" "$probe"; then
+      tmux send-keys -t "$session:agent" Enter
       sent=1
-      echo "[$session] up (bootstrap registered, attempt $attempt)"
+      echo "[$session] up ($engine; bootstrap registered, attempt $attempt)"
       break
     fi
     echo "[$session] bootstrap keystrokes not registered (attempt $attempt/2)" >&2
@@ -148,6 +198,11 @@ start_role() {
   if (( sent == 0 )); then
     echo "[$session] ERROR: bootstrap prompt failed after 2 attempts — start the watcher manually in this session" >&2
     return 1
+  fi
+
+  if [[ "$EXTERNAL_WATCHER" == "true" ]]; then
+    tmux new-window -d -t "$session" -n inbox-watch -c "$SCRIPT_DIR" \
+      "$SCRIPT_DIR/watch-inbox '$role' '$session:agent' '$WATCH_POLL_INTERVAL'"
   fi
 }
 
@@ -163,8 +218,8 @@ kill_role() {
 show_role() {
   local s; s="$(session_name "$1")"
   if tmux has-session -t "$s" 2>/dev/null; then
-    echo "=== $s (UP) ==="
-    tmux capture-pane -t "$s" -p | tail -5
+    echo "=== $s (UP, $(engine_for_role "$1")) ==="
+    tmux capture-pane -t "$s:agent" -p | tail -5
   else
     echo "=== $s (DOWN) ==="
   fi
@@ -177,7 +232,10 @@ cmd_up() {
   echo "${PROJECT}-* sessions:"
   tmux ls 2>/dev/null | grep "^${PROJECT}-" || true
   echo
-  exec tmux attach -t "$(session_name "$ATTACH_TARGET")"
+  [[ "$NO_ATTACH" == "true" ]] && return
+  local session; session="$(session_name "$ATTACH_TARGET")"
+  tmux select-window -t "$session:agent"
+  exec tmux attach -t "$session"
 }
 
 cmd_down() {
@@ -190,24 +248,29 @@ cmd_status() {
 
 cmd_attach() {
   local role="${1:-$ATTACH_TARGET}"
-  exec tmux attach -t "$(session_name "$role")"
+  local session; session="$(session_name "$role")"
+  tmux select-window -t "$session:agent"
+  exec tmux attach -t "$session"
 }
 
 cmd_init() {
   : "${REPO_URL:?REPO_URL must be set in .agents.sh for init}"
 
-  # 1) Validate ROLES vocab — each role needs both example templates.
+  # 1) Validate shared role templates and engine-specific settings.
   local missing=()
   for role in "${ROLES[@]}"; do
-    [[ -f "$SCRIPT_DIR/claude.md_example/${role}_CLAUDE.md" ]] \
-      || missing+=("claude.md_example/${role}_CLAUDE.md")
-    [[ -f "$SCRIPT_DIR/setting_example/${role}_settings.json" ]] \
-      || missing+=("setting_example/${role}_settings.json")
+    local role_engine; role_engine="$(engine_for_role "$role")"
+    [[ -f "$SCRIPT_DIR/role_templates/${role}.md" ]] \
+      || missing+=("role_templates/${role}.md")
+    if [[ "$role_engine" == "claude" ]]; then
+      [[ -f "$SCRIPT_DIR/setting_example/${role}_settings.json" ]] \
+        || missing+=("setting_example/${role}_settings.json")
+    fi
   done
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "agents init: missing example files for these roles:" >&2
     printf '  - %s\n' "${missing[@]}" >&2
-    echo "  Each role in ROLES must have both templates above. Add them or remove the role." >&2
+    echo "  Each role needs a role template; Claude roles also need settings. Add missing files or remove the role." >&2
     exit 1
   fi
 
@@ -239,19 +302,39 @@ cmd_init() {
     echo "[$role] cloning $REPO_URL → $dir_name"
     git clone "$REPO_URL" "$target"
 
-    echo "[$role] copying CLAUDE.md template"
-    cp "$SCRIPT_DIR/claude.md_example/${role}_CLAUDE.md" "$target/CLAUDE.md"
+    local engine; engine="$(engine_for_role "$role")"
+    local instruction_file
+    if [[ "$engine" == "codex" ]]; then
+      instruction_file="$target/AGENTS.md"
+      echo "[$role] copying role template as AGENTS.md (codex)"
+      cp "$SCRIPT_DIR/role_templates/${role}.md" "$instruction_file"
+      sed -i '1i# Runtime — Codex\n\nInbox monitoring is owned by the external `agents` watcher. Do not start an internal Monitor or `inotifywait` process.\n' "$instruction_file"
+    else
+      instruction_file="$target/CLAUDE.md"
+      echo "[$role] copying role template as CLAUDE.md (claude)"
+      cp "$SCRIPT_DIR/role_templates/${role}.md" "$instruction_file"
 
-    echo "[$role] copying settings.json template"
-    mkdir -p "$target/.claude"
-    cp "$SCRIPT_DIR/setting_example/${role}_settings.json" "$target/.claude/settings.json"
+      echo "[$role] copying settings.json template"
+      mkdir -p "$target/.claude"
+      cp "$SCRIPT_DIR/setting_example/${role}_settings.json" "$target/.claude/settings.json"
+    fi
+
+    # Role instructions are local to each clone and must never enter task commits.
+    if ! grep -qxF "/$(basename "$instruction_file")" "$target/.git/info/exclude"; then
+      echo "/$(basename "$instruction_file")" >> "$target/.git/info/exclude"
+    fi
 
     echo "[$role] substituting placeholders"
     sed -i \
       -e "s|<project>|${PROJECT}|g" \
       -e "s|<ABS-PATH-TO>|${PROJECT_ROOT}|g" \
-      "$target/CLAUDE.md" \
-      "$target/.claude/settings.json"
+      "$instruction_file"
+    if [[ "$engine" == "claude" ]]; then
+      sed -i \
+        -e "s|<project>|${PROJECT}|g" \
+        -e "s|<ABS-PATH-TO>|${PROJECT_ROOT}|g" \
+        "$target/.claude/settings.json"
+    fi
   done
 
   # 5) Scaffold messages/old per role.
@@ -263,9 +346,9 @@ cmd_init() {
 
   echo
   echo "✓ Init complete. Next steps:"
-  echo "  1. Review CLAUDE.md in each worktree (templates are starting points)"
+  echo "  1. Review AGENTS.md / CLAUDE.md in each worktree (templates are starting points)"
   echo "  2. $(basename "$SCRIPT_DIR")/agents up"
-  echo "  3. PM 과 대화로 프로젝트별 도메인 / 특수 규칙을 CLAUDE.md 에 추가"
+  echo "  3. PM 과 대화로 프로젝트별 도메인 / 특수 규칙을 역할 지침에 추가"
 }
 
 CMD="${1:-}"

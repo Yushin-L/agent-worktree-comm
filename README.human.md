@@ -1,6 +1,6 @@
 # agent-worktree-comm — 사람용 운영 가이드
 
-이 디렉터리는 다중 에이전트 (PM + back + front + review) 작업 환경을 위한 **인프라 키트**입니다. `README.md` 가 에이전트(LLM)가 따라야 할 메시지 규약 문서라면, 이 `README.human.md` 는 **사람이 환경을 띄우고 운영**하는 방법을 적은 문서입니다.
+이 디렉터리는 다중 에이전트 (PM + back + front + review) 작업 환경을 위한 **인프라 키트**입니다. 역할마다 Claude Code 또는 Codex를 선택할 수 있습니다. `README.md` 가 에이전트(LLM)가 따라야 할 메시지 규약 문서라면, 이 `README.human.md` 는 **사람이 환경을 띄우고 운영**하는 방법을 적은 문서입니다.
 
 ## 디렉터리 구성
 
@@ -9,13 +9,14 @@ agent-worktree-comm/
 ├── README.md             ← 에이전트용: 메시지 포맷·작업 플로우 규약
 ├── README.human.md       ← (이 파일) 사람용: 셋업 / 운영
 ├── agents                ← tmux 오케스트레이터 (실행 스크립트)
+├── watch-inbox           ← 엔진 공통 외부 인박스 watcher
 ├── .agents.sh.example    ← 프로젝트별 설정 템플릿
 ├── .agents.sh            ← (gitignore) 실제 프로젝트 설정 — 사용자가 작성
-├── claude.md_example/    ← 역할별 CLAUDE.md 템플릿 (init 이 복사)
-│   ├── pm_CLAUDE.md
-│   ├── back_CLAUDE.md
-│   ├── front_CLAUDE.md
-│   └── review_CLAUDE.md
+├── role_templates/       ← 엔진 공통 역할 지침 템플릿
+│   ├── pm.md             (init 시 엔진에 맞는 지침 파일 생성)
+│   ├── back.md
+│   ├── front.md
+│   └── review.md
 ├── setting_example/      ← 역할별 .claude/settings.json 템플릿 (init 이 복사)
 │   ├── pm_settings.json
 │   ├── back_settings.json
@@ -35,9 +36,39 @@ agent-worktree-comm/
 
 ## 사용 가능한 ROLES (표준 vocab)
 
-`pm | back | front | review` 4개. 새 ROLE 을 쓰려면 `claude.md_example/<role>_CLAUDE.md` 와 `setting_example/<role>_settings.json` 두 템플릿을 먼저 추가해야 합니다 — 이게 없으면 `agents init` 이 거부합니다.
+`pm | back | front | review` 4개. 새 ROLE 을 쓰려면 `role_templates/<role>.md`를 추가합니다. Claude로 실행할 역할은 `setting_example/<role>_settings.json`도 필요합니다. `agents init`은 선택한 엔진에 필요한 파일을 검사합니다.
 
 ROLE 명은 워크트리 디렉터리 suffix, 메시지 인박스 디렉터리, tmux 세션 이름의 일관된 식별자로 쓰입니다.
+
+## Claude Code / Codex 혼합 구성
+
+`.agents.sh`에서 역할별 엔진을 지정합니다. 생략한 역할은 `DEFAULT_AGENT_ENGINE` 값(기본 `claude`)을 사용합니다.
+
+```bash
+PROJECT=myproject
+ROLES=(pm back review)
+REPO_URL=https://github.com/owner/repo.git
+
+declare -A AGENT_ENGINES=(
+  [pm]=codex
+  [back]=claude
+  [review]=codex
+)
+
+EXTERNAL_WATCHER=true
+```
+
+- 공통 원본: `role_templates/<role>.md`에 역할 책임과 협업 규칙 작성
+- Claude 역할: 공통 원본으로 `CLAUDE.md` 생성, 별도로 `.claude/settings.json` 설치
+- Codex 역할: 공통 원본으로 `AGENTS.md` 생성
+- `setting_example/`은 Claude 전용 권한 설정이며 Codex에는 적용하지 않음
+- 현재 지원 엔진은 Claude Code와 Codex이며, 다른 하네스는 실행·초기화 처리를 추가해야 함
+- `EXTERNAL_WATCHER=true`: 각 tmux 세션에 `inbox-watch` 창을 추가하고 `messages/{role}/` 변경을 해당 에이전트 TUI에 전달
+- 외부 watcher는 기본적으로 1초 polling을 사용하므로 `inotify-tools`가 없어도 동작
+- `WATCH_POLL_INTERVAL=0.5`처럼 polling 간격을 조정 가능
+- 자동화나 서버 부팅 시 `NO_ATTACH=true`를 사용하면 `agents up`이 세션 생성 후 터미널에 attach하지 않음
+
+Codex 기본 실행 명령은 작업 디렉터리와 comm 디렉터리만 쓰도록 `workspace-write` sandbox를 사용하며, 무인 세션에서 승인 대기로 멈추지 않도록 approval policy를 `never`로 둡니다. 프로젝트별 조정은 `CODEX_CMD`로 덮어쓸 수 있습니다.
 
 ## 일상 운영 (이미 셋업된 프로젝트)
 
@@ -86,7 +117,7 @@ $EDITOR .agents.sh
 # 3. init 실행 (프로젝트 root 에서)
 cd ..
 agent-worktree-comm/agents init
-#   → ROLES 의 각 값마다 git clone, CLAUDE.md/settings.json 복사 + 변수 치환,
+#   → ROLES 의 각 값마다 git clone, 엔진별 역할 지침 복사 + 변수 치환,
 #     messages/<role>, old/<role> 스캐폴드
 
 # 4. 세션 기동
@@ -94,12 +125,12 @@ agent-worktree-comm/agents up
 
 # 5. PM 과 대화
 #   "이 프로젝트는 ... 도메인이고 ... 특수 규칙이 있어" 알려주면
-#   PM 이 4개 CLAUDE.md 에 customization 섹션 추가
+#   PM 과 역할별 지침 파일(CLAUDE.md / AGENTS.md)의 프로젝트 규칙 정리
 ```
 
 ### Placeholder 치환 매핑
 
-`claude.md_example/*` 와 `setting_example/*` 안의 placeholder 가 init 시 자동 치환됩니다:
+`role_templates/*` 와 `setting_example/*` 안의 placeholder 가 init 시 자동 치환됩니다:
 
 | Placeholder | 치환값 |
 |---|---|
@@ -131,9 +162,10 @@ worktree_dir() {
 
 ## 동작 원리 (필요할 때 참고)
 
-- `agents up` 은 각 역할에 대해 `tmux new-session -d -s <PROJECT>-<role>` 으로 백그라운드 세션을 띄우고 `claude` 실행
+- `agents up` 은 각 역할에 대해 `tmux new-session -d -s <PROJECT>-<role>` 으로 백그라운드 세션을 띄우고 설정된 `claude` 또는 `codex` 실행
 - `BOOT_SLEEP` 초 대기 (claude 인터랙티브 프롬프트 렌더 시간 확보)
-- `tmux send-keys` 로 `BOOTSTRAP_PROMPT` 전송 → 각 에이전트가 자기 CLAUDE.md 의 Session Startup Watcher 지침을 읽고 inbox 감시 시작
+- `tmux send-keys` 로 엔진별 bootstrap prompt 전송. 외부 watcher 사용 시 에이전트 내부 watcher는 시작하지 않음
+- 외부 watcher는 별도 `inbox-watch` tmux 창에서 파일 변경을 polling하고 역할의 `agent` 창에 처리 프롬프트 전송
 - 마지막에 `tmux attach -t <PROJECT>-<ATTACH_TARGET>` 으로 PM 세션 진입
 - `down` 은 `tmux kill-session` (claude 는 SIGTERM 으로 정상 종료)
 - `status` 는 각 세션의 마지막 5줄 캡처

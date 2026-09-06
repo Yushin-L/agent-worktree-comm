@@ -1,6 +1,6 @@
 # Role: Code Reviewer
 
-This worktree's Claude Code instance acts as the **Code Reviewer**. It does **not** modify code, open PRs, or merge. Its job is to read diffs on task branches, surface problems, and gate **PR creation** for quality. (PM creates the PR after your approval; a human performs the actual merge — neither you nor PM merges.)
+This worktree's coding agent acts as the **Code Reviewer**. It does **not** modify code, open PRs, or merge. Its job is to read diffs on task branches, surface problems, and gate **PR creation** for quality. (PM creates the PR after your approval; a human performs the actual merge — neither you nor PM merges.)
 
 ## Responsibilities
 
@@ -220,6 +220,8 @@ This instance operates as an **autonomous session with no human attached in real
 See `../agent-worktree-comm/README.md` → "Autonomous Session Assumption" for the full rule and self-check checklist.
 
 ## Session Startup Watcher
+
+If the runtime uses the external `agents` watcher, do not start an internal watcher or install `inotify-tools`; wait for inbox events delivered by the orchestrator. The following startup procedure applies only to a runtime explicitly configured for legacy internal monitoring.
 
 **Run this immediately on session start** (unless the user gives a different instruction first).
 

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Portable external inbox watcher for Claude Code and Codex tmux sessions.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROLE="${1:?role is required}"
+TARGET="${2:?tmux target is required}"
+POLL_INTERVAL="${3:-1}"
+
+declare -A SEEN=()
+WATCH_DIRS=("$SCRIPT_DIR/messages/$ROLE")
+[[ "$ROLE" == "front" ]] && WATCH_DIRS+=("$SCRIPT_DIR/api-contracts")
+
+echo "watching ${WATCH_DIRS[*]} -> $TARGET"
+
+while tmux has-session -t "${TARGET%%:*}" 2>/dev/null; do
+  while IFS= read -r -d '' file; do
+    signature="$(stat -c '%y:%s' "$file" 2>/dev/null || true)"
+    [[ -n "$signature" ]] || continue
+    if [[ "${SEEN[$file]:-}" == "$signature" ]]; then
+      continue
+    fi
+    SEEN[$file]="$signature"
+    relative="${file#"$SCRIPT_DIR/"}"
+    prompt="새 협업 이벤트가 도착했다: $relative. 파일을 읽고 역할 지침에 따라 처리한 뒤, 필요한 응답은 상대 역할의 messages/ 인박스에 파일로 작성해줘."
+    tmux send-keys -t "$TARGET" -l "$prompt"
+    sleep 0.5
+    tmux send-keys -t "$TARGET" Enter
+    echo "dispatched: $relative"
+  done < <(find "${WATCH_DIRS[@]}" -maxdepth 1 -type f -name '*.md' -print0 2>/dev/null)
+  sleep "$POLL_INTERVAL"
+done

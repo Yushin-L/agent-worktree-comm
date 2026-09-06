@@ -1,12 +1,12 @@
-# CLAUDE.md
+# Role: Frontend
 
-This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
+This file provides role instructions to the coding agent working in this repository.
 
 The canonical collaboration rules live in `<ABS-PATH-TO>/agent-worktree-comm/README.md` and this file is a summary. The canonical doc wins on conflict.
 
 ## Role — Frontend only
 
-**This Claude Code instance handles frontend work only.**
+**This coding agent handles frontend work only.**
 
 ### Allowed
 
@@ -87,6 +87,8 @@ See `agent-worktree-comm/README.md` → "Autonomous Session Assumption" for the 
 ---
 
 ## Session Startup — auto-watch agent-worktree-comm
+
+If the runtime uses the external `agents` watcher, do not start an internal watcher or install `inotify-tools`; wait for inbox events delivered by the orchestrator. The following startup procedure applies only to a runtime explicitly configured for legacy internal monitoring.
 
 **Run this immediately on session start** (unless the user gives a different instruction first).
 
