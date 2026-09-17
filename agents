@@ -37,8 +37,10 @@ source "$CONFIG"
 : "${BOOT_SLEEP:=2}"
 : "${SEPARATOR:=_}"
 : "${DEFAULT_AGENT_ENGINE:=claude}"
-: "${CLAUDE_CMD:=claude}"
-: "${CODEX_CMD:=codex --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir '$SCRIPT_DIR'}"
+: "${CLAUDE_MODEL:=}"
+: "${CLAUDE_EFFORT:=}"
+: "${CODEX_MODEL:=}"
+: "${CODEX_REASONING_EFFORT:=}"
 : "${EXTERNAL_WATCHER:=false}"
 : "${WATCH_POLL_INTERVAL:=1}"
 : "${NO_ATTACH:=false}"
@@ -80,11 +82,40 @@ engine_for_role() {
   esac
 }
 
+# tmux runs the command through the user's shell. Quote each generated argument
+# using portable single quotes, including paths/model IDs containing apostrophes.
+shell_quote() {
+  local value="${1//\'/\'\\\'\'}"
+  printf "'%s'" "$value"
+}
+
 command_for_engine() {
+  local command model effort
   case "$1" in
-    claude) echo "$CLAUDE_CMD" ;;
-    codex)  echo "$CODEX_CMD" ;;
+    claude)
+      # Explicit command overrides retain full control of the launch arguments.
+      if [[ -n "${CLAUDE_CMD:-}" ]]; then
+        printf '%s\n' "$CLAUDE_CMD"
+        return
+      fi
+      command=claude
+      model="$CLAUDE_MODEL"
+      effort="$CLAUDE_EFFORT"
+      [[ -z "$effort" ]] || command+=" --effort $(shell_quote "$effort")"
+      ;;
+    codex)
+      if [[ -n "${CODEX_CMD:-}" ]]; then
+        printf '%s\n' "$CODEX_CMD"
+        return
+      fi
+      command="codex --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir $(shell_quote "$SCRIPT_DIR")"
+      model="$CODEX_MODEL"
+      effort="$CODEX_REASONING_EFFORT"
+      [[ -z "$effort" ]] || command+=" -c $(shell_quote "model_reasoning_effort=\"$effort\"")"
+      ;;
   esac
+  [[ -z "$model" ]] || command+=" --model $(shell_quote "$model")"
+  printf '%s\n' "$command"
 }
 
 bootstrap_for_engine() {

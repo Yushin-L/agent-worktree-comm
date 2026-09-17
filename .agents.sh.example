@@ -13,6 +13,10 @@
 #   DEFAULT_AGENT_ENGINE  fallback engine for roles; claude (default) or codex
 #   AGENT_ENGINES    associative role-to-engine map, e.g.
 #                    declare -A AGENT_ENGINES=([pm]=codex [back]=claude)
+#   CODEX_MODEL     model ID for Codex roles; unset/empty keeps the CLI default
+#   CODEX_REASONING_EFFORT  Codex reasoning effort, e.g. high; default unset
+#   CLAUDE_MODEL    model ID for Claude roles; unset/empty keeps the CLI default
+#   CLAUDE_EFFORT   Claude effort level, e.g. high; default unset
 #   EXTERNAL_WATCHER run the portable orchestrator-owned inbox watcher; default false
 #   WATCH_POLL_INTERVAL  watcher polling interval in seconds; default 1
 #   NO_ATTACH        start sessions without attaching after `up`; default false
@@ -43,9 +47,11 @@
 #                    BOOTSTRAP_PROMPT. Set explicitly if your prompt is
 #                    all-non-ASCII (empty ⇒ post-send verification is skipped).
 #   BOOTSTRAP_PROMPT first text sent to each session after claude boots
-#   CLAUDE_CMD       command launched in each tmux session; default "claude"
+#   CLAUDE_CMD       full command override for Claude roles; bypasses CLAUDE_MODEL
+#                    and CLAUDE_EFFORT. Otherwise built from those settings.
 #                    (e.g. "claude --continue" to resume the previous conversation)
-#   CODEX_CMD        command for Codex roles; defaults to an interactive,
+#   CODEX_CMD        full command override; bypasses CODEX_MODEL and
+#                    CODEX_REASONING_EFFORT. Otherwise defaults to an interactive,
 #                    workspace-write session with the comm directory added.
 #
 # For irregular worktree layouts, override the resolver:
@@ -64,3 +70,9 @@ ATTACH_TARGET=pm
 # Mixed-engine example:
 # declare -A AGENT_ENGINES=([pm]=codex [back]=claude [front]=claude [review]=codex)
 # EXTERNAL_WATCHER=true
+
+# Optional model/effort selection (applies to every role using that engine):
+# CODEX_MODEL=gpt-6-astra
+# CODEX_REASONING_EFFORT=high
+# CLAUDE_MODEL=claude-opus-5
+# CLAUDE_EFFORT=high

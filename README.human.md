@@ -70,6 +70,34 @@ EXTERNAL_WATCHER=true
 
 Codex 기본 실행 명령은 작업 디렉터리와 comm 디렉터리만 쓰도록 `workspace-write` sandbox를 사용하며, 무인 세션에서 승인 대기로 멈추지 않도록 approval policy를 `never`로 둡니다. 프로젝트별 조정은 `CODEX_CMD`로 덮어쓸 수 있습니다.
 
+### 모델과 추론 강도 지정
+
+`.agents.sh`에 엔진별 모델과 effort를 지정할 수 있습니다. 같은 엔진을 사용하는 모든 역할에 적용됩니다.
+
+```bash
+CODEX_MODEL=gpt-6-astra
+CODEX_REASONING_EFFORT=high
+
+CLAUDE_MODEL=claude-opus-5
+CLAUDE_EFFORT=high
+```
+
+- Codex: 기본 실행 명령에 `--model gpt-6-astra -c 'model_reasoning_effort="high"'`를 추가합니다. 기존 sandbox와 comm 디렉터리 접근 옵션은 유지됩니다.
+- Claude: `claude --model claude-opus-5 --effort high`로 실행합니다.
+- 각 설정은 선택 사항입니다. 생략하거나 빈 값으로 두면 해당 옵션을 전달하지 않고 CLI 자체 설정을 따릅니다.
+- `CODEX_CMD` 또는 `CLAUDE_CMD`를 지정하면 해당 엔진의 **전체 실행 명령을 재정의**합니다. 이 경우 위 모델·effort 설정은 무시되므로 필요한 옵션을 명령에 직접 포함하세요.
+- 이미 실행 중인 세션에는 적용되지 않습니다. `agents up`은 기존 세션을 건너뛰므로 변경은 새로 시작하는 세션부터 반영됩니다.
+- 모델 접근 권한과 지원 effort 값은 사용하는 계정·CLI·모델에 따라 달라집니다. 시작 후 세션에 표시된 모델과 effort를 확인하세요.
+
+예를 들어 전체 명령을 직접 관리하려면 다음과 같이 설정할 수도 있습니다.
+
+```bash
+CLAUDE_CMD='claude --model claude-opus-5 --effort high'
+CODEX_CMD="codex --model gpt-6-astra -c 'model_reasoning_effort=\"high\"' --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir '$SCRIPT_DIR'"
+```
+
+설정 근거: [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Claude Code model configuration](https://code.claude.com/docs/en/model-config).
+
 ## 일상 운영 (이미 셋업된 프로젝트)
 
 `agents` 의 모든 명령은 **프로젝트 root 에서 호출**합니다 (= comm 디렉터리의 부모 = 워크트리들과 같은 레벨).
