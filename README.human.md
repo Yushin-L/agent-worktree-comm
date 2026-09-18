@@ -68,7 +68,11 @@ EXTERNAL_WATCHER=true
 - `WATCH_POLL_INTERVAL=0.5`처럼 polling 간격을 조정 가능
 - 자동화나 서버 부팅 시 `NO_ATTACH=true`를 사용하면 `agents up`이 세션 생성 후 터미널에 attach하지 않음
 
-Codex 기본 실행 명령은 작업 디렉터리와 comm 디렉터리만 쓰도록 `workspace-write` sandbox를 사용하며, 무인 세션에서 승인 대기로 멈추지 않도록 approval policy를 `never`로 둡니다. 프로젝트별 조정은 `CODEX_CMD`로 덮어쓸 수 있습니다.
+Codex 기본 실행 명령은 `workspace-write` sandbox에 comm 디렉터리를 추가하고, `--ask-for-approval on-request -c 'approvals_reviewer="auto_review"'`로 샌드박스 밖의 작업 요청을 자동 승인 검토에 전달합니다. 프로젝트별 조정은 `CODEX_CMD`로 덮어쓸 수 있습니다.
+
+`workspace-write`에서도 `.git`은 읽기 전용이며 네트워크와 Docker 소켓 접근은 제한될 수 있습니다. Git fetch/commit, GitHub 접근, Docker 검증이 차단되면 Codex가 권한 확대를 요청해야 하며, 자동 검토가 허용한 작업만 실행됩니다. `never`는 승인 요청 자체를 막으므로 이 협업 흐름의 기본값으로 사용하지 않습니다. 자동 검토는 모든 요청의 허용을 보장하지 않으며, 조직의 관리형 정책도 계속 적용됩니다. 자세한 동작은 [OpenAI의 에이전트 승인 및 보안 문서](https://developers.openai.com/ko-KR/docs/agent-approvals-security)를 참고하세요.
+
+기존 세션에는 실행 옵션 변경이 적용되지 않습니다. `agents up`도 실행 중인 세션을 건너뛰므로, 진행 중인 작업을 보존한 뒤 해당 Codex 세션을 새 옵션으로 재시작해야 합니다. `CODEX_CMD`를 따로 설정한 프로젝트는 그 명령에도 승인 옵션을 반영해야 합니다.
 
 ### 모델과 추론 강도 지정
 
@@ -93,7 +97,7 @@ CLAUDE_EFFORT=high
 
 ```bash
 CLAUDE_CMD='claude --model claude-opus-5 --effort high'
-CODEX_CMD="codex --model gpt-6-astra -c 'model_reasoning_effort=\"high\"' --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir '$SCRIPT_DIR'"
+CODEX_CMD="codex --model gpt-6-astra -c 'model_reasoning_effort=\"high\"' --no-alt-screen --sandbox workspace-write --ask-for-approval on-request -c 'approvals_reviewer=\"auto_review\"' --add-dir '$SCRIPT_DIR'"
 ```
 
 설정 근거: [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Claude Code model configuration](https://code.claude.com/docs/en/model-config).

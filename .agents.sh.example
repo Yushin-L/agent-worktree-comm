@@ -51,8 +51,9 @@
 #                    and CLAUDE_EFFORT. Otherwise built from those settings.
 #                    (e.g. "claude --continue" to resume the previous conversation)
 #   CODEX_CMD        full command override; bypasses CODEX_MODEL and
-#                    CODEX_REASONING_EFFORT. Otherwise defaults to an interactive,
-#                    workspace-write session with the comm directory added.
+#                    CODEX_REASONING_EFFORT and the default approval settings.
+#                    Otherwise uses workspace-write with the comm directory added,
+#                    on-request approvals and approvals_reviewer="auto_review".
 #
 # For irregular worktree layouts, override the resolver:
 #   worktree_dir() {

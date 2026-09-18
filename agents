@@ -108,7 +108,9 @@ command_for_engine() {
         printf '%s\n' "$CODEX_CMD"
         return
       fi
-      command="codex --no-alt-screen --sandbox workspace-write --ask-for-approval never --add-dir $(shell_quote "$SCRIPT_DIR")"
+      # Git metadata, network and Docker may require sandbox escalation.
+      # Route those requests through automatic review instead of denying them.
+      command="codex --no-alt-screen --sandbox workspace-write --ask-for-approval on-request -c $(shell_quote 'approvals_reviewer="auto_review"') --add-dir $(shell_quote "$SCRIPT_DIR")"
       model="$CODEX_MODEL"
       effort="$CODEX_REASONING_EFFORT"
       [[ -z "$effort" ]] || command+=" -c $(shell_quote "model_reasoning_effort=\"$effort\"")"
