@@ -31,6 +31,8 @@
 #                    default "❯" for Claude Code.
 #   CODEX_READY_MARKER  Codex TUI input marker; default "› Ask Codex".
 #   CODEX_TRUST_MARKER  Codex first-run trust dialog substring; accepted automatically.
+#   CODEX_UPDATE_MARKER Codex startup "Update available" dialog substring; skipped
+#                    once with Esc (never Enter, which would run npm install).
 #   BOOT_TRUST_MARKER   pane substring of claude's first-run "trust this folder"
 #                    dialog; when seen while waiting for readiness the script
 #                    presses Enter to accept it (cursor defaults to "Yes, I

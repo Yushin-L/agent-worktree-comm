@@ -50,6 +50,9 @@ source "$CONFIG"
 : "${BOOT_READY_MARKER:=❯}"             # pane substring signalling the main input UI is rendered
 : "${CODEX_READY_MARKER:=› Ask Codex}"  # Codex TUI composer marker
 : "${CODEX_TRUST_MARKER:=Do you trust the contents of this directory?}"
+# Codex startup "Update available" dialog defaults to "Update now"; never press
+# Enter on it. Esc skips it for this launch.
+: "${CODEX_UPDATE_MARKER:=Update available}"
 : "${BOOT_TRUST_MARKER:=trust this folder}" # first-run trust dialog substring; script accepts it
 : "${BOOT_TRUST_NO_MARKER:=❯[[:space:]]*No, exit}" # regex: cursor sitting on the "No, exit" option ⇒ press Down before Enter
 # Optional ASCII probe used to confirm the bootstrap prompt landed in the composer.
@@ -142,12 +145,21 @@ wait_until_ready() {
   sleep "$BOOT_SLEEP"                     # brief floor before the pane is worth reading
   local deadline=$(( SECONDS + BOOT_READY_TIMEOUT ))
   local trusted=0
+  local update_skipped=0
   local pane
   while (( SECONDS <= deadline )); do
     pane="$(tmux capture-pane -pt "$session" 2>/dev/null || true)"
     if (( trusted == 0 )) && [[ "$engine" == "codex" ]] && [[ -n "$CODEX_TRUST_MARKER" ]] && grep -qF "$CODEX_TRUST_MARKER" <<<"$pane"; then
       tmux send-keys -t "$session" Enter
       trusted=1
+      sleep 0.5
+      continue
+    fi
+    # A pending Codex release shows a modal update prompt that swallows the
+    # bootstrap keystrokes. Skip it once with Esc (Enter would run npm install).
+    if (( update_skipped == 0 )) && [[ "$engine" == "codex" ]] && [[ -n "$CODEX_UPDATE_MARKER" ]] && grep -qF "$CODEX_UPDATE_MARKER" <<<"$pane"; then
+      tmux send-keys -t "$session" Escape
+      update_skipped=1
       sleep 0.5
       continue
     fi
@@ -189,8 +201,10 @@ start_role() {
   local role="$1"
   local session; session="$(session_name "$role")"
   local dir="$PROJECT_ROOT/$(worktree_dir "$role")"
-  local engine; engine="$(engine_for_role "$role")"
-  local agent_cmd; agent_cmd="$(command_for_engine "$engine")"
+  # Called from `cmd_up` as `start_role || ...`, which disables `set -e` inside
+  # this function, so every failure path must return explicitly.
+  local engine; engine="$(engine_for_role "$role")" || return 1
+  local agent_cmd; agent_cmd="$(command_for_engine "$engine")" || return 1
   local bootstrap; bootstrap="$(bootstrap_for_engine "$engine")"
   local probe
   probe="${BOOT_PROBE:-$(printf '%s' "$bootstrap" | grep -oE '[A-Za-z][A-Za-z ]{6,}' | head -1 || true)}"
@@ -203,7 +217,10 @@ start_role() {
     echo "[$session] worktree missing: $dir" >&2
     return 1
   fi
-  tmux new-session -d -s "$session" -n agent -c "$dir" "$agent_cmd"
+  tmux new-session -d -s "$session" -n agent -c "$dir" "$agent_cmd" || {
+    echo "[$session] ERROR: failed to create tmux session" >&2
+    return 1
+  }
 
   if ! wait_until_ready "$session:agent" "$engine"; then
     echo "[$session/$engine] WARNING: TUI not input-ready after ${BOOT_READY_TIMEOUT}s — attempting bootstrap anyway" >&2
@@ -235,7 +252,10 @@ start_role() {
 
   if [[ "$EXTERNAL_WATCHER" == "true" ]]; then
     tmux new-window -d -t "$session" -n inbox-watch -c "$SCRIPT_DIR" \
-      "$SCRIPT_DIR/watch-inbox '$role' '$session:agent' '$WATCH_POLL_INTERVAL'"
+      "$SCRIPT_DIR/watch-inbox '$role' '$session:agent' '$WATCH_POLL_INTERVAL'" || {
+      echo "[$session] ERROR: failed to start inbox-watch window" >&2
+      return 1
+    }
   fi
 }
 
@@ -260,12 +280,22 @@ show_role() {
 }
 
 cmd_up() {
-  for role in "${ROLES[@]}"; do start_role "$role"; done
+  # One role failing to boot must not prevent the remaining roles from starting.
+  local failed=()
+  for role in "${ROLES[@]}"; do
+    start_role "$role" || failed+=("$role")
+  done
   echo
   echo "${PROJECT}-* sessions:"
   tmux ls 2>/dev/null | grep "^${PROJECT}-" || true
   echo
-  [[ "$NO_ATTACH" == "true" ]] && return
+  if (( ${#failed[@]} > 0 )); then
+    echo "agents up: failed roles: ${failed[*]} — inspect with 'agents attach <role>'" >&2
+    echo
+  fi
+  if [[ "$NO_ATTACH" == "true" ]]; then
+    return $(( ${#failed[@]} > 0 ))
+  fi
   local session; session="$(session_name "$ATTACH_TARGET")"
   tmux select-window -t "$session:agent"
   exec tmux attach -t "$session"
