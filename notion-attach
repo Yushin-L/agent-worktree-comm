@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Attach files to an issue's mirror row in a Notion database.
+#
+#   NOTION_TOKEN=... notion-attach --db <database_id> --issue <number> \
+#       [--title <issue title>] [--heading <text>] <file>...
+#
+# The row is the page whose title starts with "#<number>". When no such row
+# exists one is created with the title "#<number> <title>" and every other
+# property left empty. Files are uploaded through Notion's File Upload API and
+# appended to the row body under a heading. Prints the row URL on stdout;
+# progress and errors go to stderr.
+set -euo pipefail
+
+API="https://api.notion.com/v1"
+NOTION_VERSION="2022-06-28"
+SINGLE_PART_MAX=$(( 20 * 1024 * 1024 ))   # Notion: larger files must be multi-part
+PART_SIZE=$(( 10 * 1024 * 1024 ))         # Notion: parts of 5–20 MiB (last may be smaller)
+
+die() { echo "notion-attach: $*" >&2; exit 1; }
+
+DB="" ISSUE="" TITLE="" HEADING=""
+FILES=()
+while (( $# > 0 )); do
+  case "$1" in
+    --db)      DB="${2:?--db needs a value}"; shift 2 ;;
+    --issue)   ISSUE="${2:?--issue needs a value}"; shift 2 ;;
+    --title)   TITLE="${2-}"; shift 2 ;;
+    --heading) HEADING="${2-}"; shift 2 ;;
+    --)        shift; FILES+=("$@"); break ;;
+    -*)        die "unknown option '$1'" ;;
+    *)         FILES+=("$1"); shift ;;
+  esac
+done
+
+[[ -n "${NOTION_TOKEN:-}" ]] || die "NOTION_TOKEN is not set"
+[[ -n "$DB" ]] || die "--db is required"
+[[ "$ISSUE" =~ ^[0-9]+$ ]] || die "--issue must be a number"
+(( ${#FILES[@]} > 0 )) || die "no files given"
+for f in "${FILES[@]}"; do [[ -f "$f" ]] || die "not a file: $f"; done
+: "${HEADING:=Agent session logs ($(date +%F))}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# api <curl args...> — run a request and fail with Notion's message on an error
+# response. The token is passed through a header file so it never appears in
+# the process list.
+printf 'Authorization: Bearer %s\n' "$NOTION_TOKEN" > "$TMP/auth"
+chmod 600 "$TMP/auth"
+api() {
+  local out
+  out="$(curl -sS --connect-timeout 20 -H @"$TMP/auth" -H "Notion-Version: $NOTION_VERSION" "$@")" \
+    || die "request failed: ${*: -1}"
+  if [[ "$(jq -r '.object // empty' <<<"$out" 2>/dev/null)" == "error" ]]; then
+    die "$(jq -r '"\(.code): \(.message)"' <<<"$out")"
+  fi
+  printf '%s' "$out"
+}
+api_json() { api -H "Content-Type: application/json" "$@"; }
+
+content_type_for() {
+  case "$1" in
+    *.gz|*.tgz) echo "application/gzip" ;;
+    *.zip)      echo "application/zip" ;;
+    *.json)     echo "application/json" ;;
+    *.txt|*.md) echo "text/plain" ;;
+    *)          echo "application/octet-stream" ;;
+  esac
+}
+
+# upload_file <path> — prints the file_upload id.
+upload_file() {
+  local path="$1" name ctype size id
+  name="$(basename "$path")"
+  ctype="$(content_type_for "$name")"
+  size="$(stat -c %s "$path")"
+
+  if (( size <= SINGLE_PART_MAX )); then
+    id="$(api_json -X POST "$API/file_uploads" \
+      -d "$(jq -n --arg n "$name" --arg c "$ctype" '{filename:$n, content_type:$c}')" | jq -r .id)"
+    api -X POST "$API/file_uploads/$id/send" -F "file=@$path;type=$ctype;filename=$name" >/dev/null
+  else
+    local parts_dir="$TMP/parts.$RANDOM" part n=0 total
+    mkdir -p "$parts_dir"
+    split -b "$PART_SIZE" -d -a 4 "$path" "$parts_dir/part."
+    total="$(find "$parts_dir" -type f | wc -l)"
+    id="$(api_json -X POST "$API/file_uploads" \
+      -d "$(jq -n --arg n "$name" --arg c "$ctype" --argjson p "$total" \
+            '{mode:"multi_part", number_of_parts:$p, filename:$n, content_type:$c}')" | jq -r .id)"
+    for part in "$parts_dir"/part.*; do
+      n=$(( n + 1 ))
+      api -X POST "$API/file_uploads/$id/send" \
+        -F "part_number=$n" -F "file=@$part;type=$ctype;filename=$name" >/dev/null
+    done
+    api_json -X POST "$API/file_uploads/$id/complete" -d '{}' >/dev/null
+    rm -rf "$parts_dir"
+  fi
+  echo "notion-attach: uploaded $name ($size bytes)" >&2
+  printf '%s' "$id"
+}
+
+# --- find or create the row -------------------------------------------------
+title_prop="$(api_json "$API/databases/$DB" \
+  | jq -r '.properties | to_entries[] | select(.value.type=="title") | .key')"
+[[ -n "$title_prop" ]] || die "database $DB has no title property"
+
+# `contains "#12"` also matches "#123", so the exact prefix is checked client-side.
+page="$(api_json -X POST "$API/databases/$DB/query" \
+  -d "$(jq -n --arg p "$title_prop" --arg q "#$ISSUE" \
+        '{page_size:100, filter:{property:$p, title:{contains:$q}}}')" \
+  | jq -c --arg p "$title_prop" --arg n "$ISSUE" \
+      '[.results[] | select((.properties[$p].title | map(.plain_text) | join(""))
+                            | test("^#" + $n + "([^0-9]|$)"))][0] // empty')"
+
+if [[ -z "$page" ]]; then
+  row_title="#$ISSUE${TITLE:+ $TITLE}"
+  page="$(api_json -X POST "$API/pages" \
+    -d "$(jq -n --arg db "$DB" --arg p "$title_prop" --arg t "$row_title" \
+          '{parent:{database_id:$db}, properties:{($p):{title:[{text:{content:$t}}]}}}')")"
+  echo "notion-attach: no row for #$ISSUE — created \"$row_title\" (fill in its other properties)" >&2
+fi
+page_id="$(jq -r .id <<<"$page")"
+page_url="$(jq -r .url <<<"$page")"
+
+# --- upload and attach ------------------------------------------------------
+blocks="$(jq -n --arg h "$HEADING" \
+  '[{object:"block", type:"heading_3", heading_3:{rich_text:[{text:{content:$h}}]}}]')"
+for f in "${FILES[@]}"; do
+  id="$(upload_file "$f")"
+  blocks="$(jq --arg id "$id" --arg n "$(basename "$f")" \
+    '. + [{object:"block", type:"file",
+           file:{type:"file_upload", file_upload:{id:$id}, name:$n}}]' <<<"$blocks")"
+done
+api_json -X PATCH "$API/blocks/$page_id/children" \
+  -d "$(jq -n --argjson b "$blocks" '{children:$b}')" >/dev/null
+
+echo "$page_url"

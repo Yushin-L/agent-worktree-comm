@@ -2,3 +2,4 @@ api-contracts/**/*.md
 messages/**/*.md
 old/**/*.md
 .agents.sh
+logs/

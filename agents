@@ -10,6 +10,9 @@
 #   agents down                kill every role's tmux session
 #   agents status              dump last 5 lines of each session
 #   agents attach [role]       attach to a specific role (default: ATTACH_TARGET)
+#   agents archive <issue>     collect every role's session transcripts since `up`
+#                              into logs/<issue>/ and attach them to the issue's
+#                              Notion row when SESSION_LOG_NOTION_DB is set
 #   agents init                (new project) clone REPO_URL per role + copy
 #                              engine-specific instructions + scaffold
 #                              messages/ and old/ directories.
@@ -44,6 +47,8 @@ source "$CONFIG"
 : "${EXTERNAL_WATCHER:=false}"
 : "${WATCH_POLL_INTERVAL:=1}"
 : "${NO_ATTACH:=false}"
+: "${SESSION_LOG_NOTION_DB:=}"                    # Notion database holding one row per issue; empty ⇒ local archive only
+: "${SESSION_LOG_NOTION_TOKEN_ENV:=NOTION_API_KEY}" # NAME of the env var holding the Notion token (never the token itself)
 : "${BOOT_READY_TIMEOUT:=30}"           # max seconds to poll for claude's TUI becoming input-ready
 # Composer prompt char — the "? for shortcuts" footer was removed in newer
 # Claude Code TUIs (≥2.1.x), so match the input-line marker instead.
@@ -279,6 +284,134 @@ show_role() {
   echo
 }
 
+# ── Session archive ─────────────────────────────────────────────────────────
+# Both engines write one JSONL transcript per session, keyed by the directory
+# the agent was started in. A role's transcripts for "this run" are therefore
+# the files for its worktree that were modified since its tmux session started;
+# no bookkeeping is needed while the sessions are up.
+LOG_DIR="$SCRIPT_DIR/logs"
+
+# Earliest tmux start time (epoch) among this project's running role sessions.
+run_started_at() {
+  local role s t min=""
+  for role in "${ROLES[@]}"; do
+    s="$(session_name "$role")"
+    t="$(tmux display-message -p -t "$s" '#{session_created}' 2>/dev/null || true)"
+    [[ "$t" =~ ^[0-9]+$ ]] || continue
+    if [[ -z "$min" ]] || (( t < min )); then min="$t"; fi
+  done
+  [[ -n "$min" ]] && echo "$min"
+}
+
+# Has `agents archive` produced an archive since the given epoch?
+archived_since() {
+  [[ -d "$LOG_DIR" ]] || return 1
+  [[ -n "$(find "$LOG_DIR" -mindepth 2 -maxdepth 2 -name manifest.txt -newermt "@$1" -print -quit)" ]]
+}
+
+# collect_role_sessions <role> <since-epoch> <stage-dir>
+# Copies the role's transcripts into <stage-dir> and prints how many were found.
+collect_role_sessions() {
+  local role="$1" since="$2" stage="$3"
+  local dir engine f count=0
+  dir="$PROJECT_ROOT/$(worktree_dir "$role")"
+  [[ -d "$dir" ]] || { echo 0; return; }
+  dir="$(cd "$dir" && pwd -P)"
+  engine="$(engine_for_role "$role")"
+  mkdir -p "$stage"
+  case "$engine" in
+    claude)
+      # ~/.claude/projects/<cwd with every non-alphanumeric char as "-">/<session-id>.jsonl
+      # plus <session-id>/ holding subagent transcripts.
+      local pdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${dir//[^A-Za-z0-9]/-}"
+      while IFS= read -r -d '' f; do
+        cp -p "$f" "$stage/"
+        [[ -d "${f%.jsonl}" ]] && cp -rp "${f%.jsonl}" "$stage/"
+        count=$(( count + 1 ))
+      done < <(find "$pdir" -maxdepth 1 -type f -name '*.jsonl' -newermt "@$since" -print0 2>/dev/null)
+      ;;
+    codex)
+      # ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl; the first line records the cwd.
+      while IFS= read -r -d '' f; do
+        [[ "$(head -n 1 "$f" | jq -r '.payload.cwd // empty' 2>/dev/null)" == "$dir" ]] || continue
+        cp -p "$f" "$stage/"
+        count=$(( count + 1 ))
+      done < <(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name 'rollout-*.jsonl' -newermt "@$since" -print0 2>/dev/null)
+      ;;
+  esac
+  echo "$count"
+}
+
+cmd_archive() {
+  local issue="" since="" upload=true
+  while (( $# > 0 )); do
+    case "$1" in
+      --since)     since="${2:?--since needs a value}"; shift 2 ;;
+      --no-upload) upload=false; shift ;;
+      -*)          echo "agents archive: unknown option '$1'" >&2; exit 1 ;;
+      *)           issue="${1#\#}"; shift ;;
+    esac
+  done
+  [[ "$issue" =~ ^[0-9]+$ ]] || {
+    echo "usage: agents archive <issue-number> [--since <time>] [--no-upload]" >&2; exit 1
+  }
+
+  if [[ -n "$since" ]]; then
+    since="$(date -d "$since" +%s)" || { echo "agents archive: cannot parse --since" >&2; exit 1; }
+  else
+    since="$(run_started_at)" || {
+      echo "agents archive: no ${PROJECT}-* session is running, so the start of the run is unknown — pass --since '<time>' (anything \`date -d\` accepts)" >&2
+      exit 1
+    }
+  fi
+
+  local dest="$LOG_DIR/$issue" stage role n total=0
+  local files=() lines=()
+  stage="$(mktemp -d)"
+  mkdir -p "$dest"
+  for role in "${ROLES[@]}"; do
+    n="$(collect_role_sessions "$role" "$since" "$stage/$role")"
+    lines+=("$role ($(engine_for_role "$role")): $n session(s)")
+    echo "[$role] $n session(s)"
+    (( n > 0 )) || continue
+    total=$(( total + n ))
+    tar -czf "$dest/$role.tar.gz" -C "$stage/$role" .
+    files+=("$dest/$role.tar.gz")
+  done
+  rm -rf "$stage"
+  if (( total == 0 )); then
+    echo "agents archive: no session transcripts modified since $(date -d "@$since" '+%F %T') were found" >&2
+    exit 1
+  fi
+  {
+    echo "issue: #$issue"
+    echo "project: $PROJECT"
+    echo "since: $(date -d "@$since" '+%F %T %z')"
+    echo "archived: $(date '+%F %T %z')"
+    printf '%s\n' "${lines[@]}"
+  } > "$dest/manifest.txt"
+  echo "local: $dest"
+
+  [[ "$upload" == "true" && -n "$SESSION_LOG_NOTION_DB" ]] || return 0
+  local token="${!SESSION_LOG_NOTION_TOKEN_ENV:-}"
+  if [[ -z "$token" ]]; then
+    echo "agents archive: \$$SESSION_LOG_NOTION_TOKEN_ENV is empty — kept the local archive, skipped the Notion upload" >&2
+    exit 1
+  fi
+  # Only used when the row has to be created; best effort.
+  local title=""
+  if [[ "${REPO_URL:-}" =~ github\.com[:/]([^/]+/[^/]+)$ ]]; then
+    title="$(gh issue view "$issue" --repo "${BASH_REMATCH[1]%.git}" --json title -q .title 2>/dev/null || true)"
+  fi
+  local url
+  url="$(NOTION_TOKEN="$token" "$SCRIPT_DIR/notion-attach" \
+    --db "$SESSION_LOG_NOTION_DB" --issue "$issue" --title "$title" "${files[@]}")" || {
+    echo "agents archive: Notion upload failed — the local archive is intact at $dest" >&2
+    exit 1
+  }
+  echo "notion: $url"
+}
+
 cmd_up() {
   # One role failing to boot must not prevent the remaining roles from starting.
   local failed=()
@@ -302,7 +435,14 @@ cmd_up() {
 }
 
 cmd_down() {
+  # The run's start time dies with the tmux sessions, so capture it first.
+  local since; since="$(run_started_at || true)"
   for role in "${ROLES[@]}"; do kill_role "$role"; done
+  if [[ -n "$since" ]] && ! archived_since "$since"; then
+    echo
+    echo "note: this run's sessions were not archived. The transcripts are still on disk; to keep them:"
+    echo "  agents archive <issue> --since '$(date -d "@$since" '+%F %T')'"
+  fi
 }
 
 cmd_status() {
@@ -420,6 +560,7 @@ case "$CMD" in
   down)   cmd_down ;;
   status) cmd_status ;;
   attach) cmd_attach "${2:-}" ;;
+  archive) shift; cmd_archive "$@" ;;
   init)   cmd_init ;;
   ""|-h|--help|help)
     cat <<USAGE
@@ -430,6 +571,8 @@ Usage:
   agents down                kill all sessions
   agents status              show each session state + last 5 lines
   agents attach [role]       attach to a specific role
+  agents archive <issue>     save this run's session transcripts to logs/<issue>/
+                             (+ Notion row when SESSION_LOG_NOTION_DB is set)
   agents init                (new project) clone REPO_URL per role + scaffold
 
 Standard roles: pm | back | front | review (extend by adding example templates).
