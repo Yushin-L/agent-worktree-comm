@@ -10,6 +10,7 @@ agent-worktree-comm/
 ├── README.human.md       ← (이 파일) 사람용: 셋업 / 운영
 ├── agents                ← tmux 오케스트레이터 (실행 스크립트)
 ├── watch-inbox           ← 엔진 공통 외부 인박스 watcher
+├── notion-attach         ← 이슈의 노션 행에 파일을 첨부 (`agents archive` 가 호출)
 ├── .agents.sh.example    ← 프로젝트별 설정 템플릿
 ├── .agents.sh            ← (gitignore) 실제 프로젝트 설정 — 사용자가 작성
 ├── role_templates/       ← 엔진 공통 역할 지침 템플릿
@@ -30,6 +31,7 @@ agent-worktree-comm/
 ├── old/                  ← 처리된 메시지 아카이브 (역할별)
 │   ├── pm/
 │   └── ...
+├── logs/                 ← (gitignore) 이슈별 세션 기록 — `agents archive` 가 생성
 ├── api-contracts/        ← 백엔드 API 계약 (백엔드가 작성)
 └── agent-permissions.md
 ```
@@ -112,6 +114,7 @@ CODEX_CMD="codex --model gpt-6-astra -c 'model_reasoning_effort=\"high\"' --no-a
 | 일괄 종료 | `agent-worktree-comm/agents down` | 작업 종료 / 머신 자원 회수 시점에만. 태스크마다 down 안 함 |
 | 세션별 상태 dump | `agent-worktree-comm/agents status` | attach 없이 마지막 5줄 점검 |
 | 특정 역할 attach | `agent-worktree-comm/agents attach [role]` | role 생략 시 ATTACH_TARGET (기본 pm) |
+| 이슈의 세션 기록 보관 | `agent-worktree-comm/agents archive <이슈번호>` | 보통 PM 이 태스크 마무리 때 실행. 아래 "세션 기록 보관" 참고 |
 | detach (세션 유지) | `Ctrl+B d` | tmux 표준 |
 
 매번 `agent-worktree-comm/` 타이핑이 귀찮으면 alias:
@@ -119,6 +122,18 @@ CODEX_CMD="codex --model gpt-6-astra -c 'model_reasoning_effort=\"high\"' --no-a
 # ~/.bashrc 또는 ~/.zshrc
 alias agents='./agent-worktree-comm/agents'   # 프로젝트 root 에서만 동작
 ```
+
+### 세션 기록 보관 (`agents archive`)
+
+일주일 뒤에 "이 이슈에서 내가 뭘 요청했고 실제로 어떻게 진행됐는지"를 되짚을 수 있도록, 태스크를 마무리할 때 모든 역할의 세션 기록을 이슈 단위로 남깁니다.
+
+- **누가 실행하나**: PM 입니다. 머지를 확인해 주거나 "정리해줘"라고 하면 PM 이 main 으로 복귀하면서 `agents archive <이슈번호>` 를 실행하고, GitHub 이슈에 요약 댓글을 답니다 (`role_templates/pm.md` 의 "Closing a task").
+- **무엇을 모으나**: 각 역할 워크트리에서 **`agents up` 이후 수정된** 세션 파일 전부입니다. Claude 는 `~/.claude/projects/<워크트리 경로>/*.jsonl` 과 서브에이전트 폴더, Codex 는 `~/.codex/sessions/` 아래에서 cwd 가 그 워크트리인 rollout 파일입니다. 시작 시각은 tmux 세션 생성 시각에서 읽으므로 별도 상태 파일이 없습니다.
+- **어디에 남나**: `logs/<이슈번호>/<역할>.tar.gz` 와 `manifest.txt` (gitignore). `.agents.sh` 에 `SESSION_LOG_NOTION_DB` 를 설정하면 그 노션 DB 에서 제목이 `#<이슈번호>` 로 시작하는 행 본문에 파일을 첨부하고 행 URL 을 출력합니다. 행이 없으면 제목만 채운 행을 새로 만듭니다.
+- **토큰**: `SESSION_LOG_NOTION_TOKEN_ENV` 에 토큰이 들어 있는 **환경변수 이름**을 적습니다 (기본 `NOTION_API_KEY`). 토큰 자체는 `.agents.sh` 에 적지 않습니다. 해당 integration 이 그 DB 에 연결돼 있어야 합니다.
+- **이슈 하나 = `up`~`down` 한 번**으로 운영하면 기록이 이슈와 정확히 맞습니다. 한 번의 `up` 안에서 여러 이슈를 처리하면 각 이슈의 보관본에 그 시점까지의 세션 전체가 들어갑니다.
+- **보관 없이 `down` 한 경우**: `agents down` 이 `agents archive <issue> --since '<시각>'` 형태의 안내를 출력합니다. 세션 파일은 디스크에 남아 있으므로 그 명령으로 나중에 보관할 수 있습니다. `--no-upload` 는 노션 업로드를 건너뜁니다.
+- **주의**: 세션 기록에는 도구 출력이 그대로 들어 있습니다(환경변수, 조회 결과 등). 노션 DB 의 공유 범위를 확인하고, 기록을 GitHub 에는 올리지 않습니다.
 
 ### SSH 끊김 대응
 
@@ -217,6 +232,7 @@ worktree_dir() {
 
 ## 운영 팁
 
+- **이슈 단위로 `up`/`down` 하는 운영도 가능** — 세션 기록을 이슈별로 깔끔하게 남기고 싶다면 이슈 하나를 마무리(`agents archive`)한 뒤 `down` 하고, 다음 이슈에서 다시 `up` 합니다. 아래 "down 하지 않음" 팁과는 PM 의 누적 컨텍스트와 기록의 정확성 사이의 선택입니다.
 - **태스크 단위로 `agents down` 하지 않음** — tmux 세션은 SSH 끊겨도 살아있어서, 다음 task 가 들어오면 PM 에 지시만 추가하면 같은 conversation 으로 이어감. PM 의 누적 컨텍스트가 큰 자산. `down` 은 하루 작업 종료 / 머신 자원 회수 / 프로젝트 전환 시점에만.
 - **여러 프로젝트 동시 운영** — 세션 namespace 가 `<PROJECT>-` prefix 로 격리됨. 각 프로젝트 디렉터리에서 `agents up` 따로 돌리면 됨.
 - **`claude --continue` 로 부팅** — `.agents.sh` 에 `CLAUDE_CMD="claude --continue"` 두면 매번 새 conversation 이 아니라 직전 세션 이어감. 부트스트랩 프롬프트는 매번 들어가지만 watcher 가 이미 있으면 에이전트가 알아서 무시.
@@ -226,3 +242,4 @@ worktree_dir() {
 
 - 2026-04-24 초안 (drive 프로젝트 기반)
 - 2026-04-26 `agents init` 추가 (clone 기반 신규 프로젝트 부트스트랩), ROLES vocab 표준화 (`pm | back | front | review`), placeholder 치환 매핑 정리
+- 2026-11-11 `agents archive` 추가 (이슈별 세션 기록 보관, 노션 이슈 행 첨부), `notion-attach` 추가

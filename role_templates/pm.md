@@ -77,7 +77,14 @@ Why: PM messages to front / back / review are only useful if grounded in the act
 3. After PR creation, move related task messages to `old/{recipient}/` — for each recipient whose inbox held task messages, move them all (the task is sealed from the agent side).
 4. **Stay on the task branch** so the human can test against the actual proposed code from this worktree (`git pull --ff-only` to absorb any review-driven follow-up commits while waiting).
 5. **After the human confirms the merge**, checkout main (`git checkout main && git pull`). This is the only point in the task lifecycle where PM returns to main.
-6. Branch deletion (local + remote) is the human's responsibility post-merge.
+6. **Archive the task's agent sessions** (same moment as step 5 — also when the human asks you to "wrap up" / "정리해줘" a task):
+
+   ```bash
+   ../agent-worktree-comm/agents archive <issue-number>
+   ```
+
+   This collects every role's session transcripts since `agents up` into `../agent-worktree-comm/logs/<issue>/` and, when the project configures it, attaches them to the issue's Notion row (the command prints `notion: <url>`). Then post **one** comment on the GitHub issue: 3–6 lines on what the human asked for and how it was resolved, plus the `notion:` URL if one was printed. Never paste transcript contents into GitHub — transcripts hold raw tool output. If the command fails, report the error to the human as-is; the local archive (if any) is kept, so do not improvise another upload path.
+7. Branch deletion (local + remote) is the human's responsibility post-merge.
 
 Exceptions: trivial changes (typos, comments) may skip review at PM's discretion. Any logic change requires review.
 

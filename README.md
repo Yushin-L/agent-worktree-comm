@@ -32,11 +32,13 @@ Configure roles and engines in `.agents.sh`. The current runtime supports Claude
 │   │   ├── back/
 │   │   ├── pm/
 │   │   └── review/
-│   └── old/                                ← archive of processed messages
-│       ├── front/
-│       ├── back/
-│       ├── pm/
-│       └── review/
+│   ├── old/                                ← archive of processed messages
+│   │   ├── front/
+│   │   ├── back/
+│   │   ├── pm/
+│   │   └── review/
+│   └── logs/                               ← per-issue session transcripts (`agents archive`, gitignored)
+│       └── <issue>/
 │
 ├── <project>_front/                        ← frontend worktree
 │   └── CLAUDE.md or AGENTS.md
@@ -188,6 +190,7 @@ Details: see the review worktree's role instructions (`CLAUDE.md` or `AGENTS.md`
 - **A human performs the actual merge.** PM / agents never run `gh pr merge` or merge directly.
 - At PR creation time, PM archives related messages to `old/{recipient}/` (the human's merge is treated as an external event).
 - Branch deletion (local + remote) is the human's responsibility post-merge.
+- Once the human confirms the merge (or asks PM to wrap the task up), PM runs `agents archive <issue>`: every role's session transcripts since `agents up` are saved to `logs/<issue>/` and, if the project configures a Notion issue database, attached to that issue's row. PM then leaves a short summary comment (with the Notion link) on the GitHub issue. Transcripts themselves never go to GitHub.
 
 #### Exceptions
 

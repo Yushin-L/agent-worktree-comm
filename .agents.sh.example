@@ -20,6 +20,13 @@
 #   EXTERNAL_WATCHER run the portable orchestrator-owned inbox watcher; default false
 #   WATCH_POLL_INTERVAL  watcher polling interval in seconds; default 1
 #   NO_ATTACH        start sessions without attaching after `up`; default false
+#   SESSION_LOG_NOTION_DB  Notion database ID with one row per issue (title
+#                    starting "#<number>"). When set, `agents archive <issue>`
+#                    attaches the session transcripts to that row; unset ⇒ the
+#                    archive stays local in logs/<issue>/.
+#   SESSION_LOG_NOTION_TOKEN_ENV  NAME of the environment variable holding the
+#                    Notion integration token; default NOTION_API_KEY. Put the
+#                    name here, never the token.
 #   SEPARATOR        between repo name and role; default "_"
 #   ATTACH_TARGET    role to attach to on `agents up`; default "pm"
 #   BOOT_SLEEP       initial grace (seconds) before polling the pane for
@@ -79,3 +86,7 @@ ATTACH_TARGET=pm
 # CODEX_REASONING_EFFORT=high
 # CLAUDE_MODEL=claude-opus-5
 # CLAUDE_EFFORT=high
+
+# Attach each issue's session transcripts to its row in a Notion database:
+# SESSION_LOG_NOTION_DB=0123456789abcdef0123456789abcdef
+# SESSION_LOG_NOTION_TOKEN_ENV=NOTION_API_KEY
