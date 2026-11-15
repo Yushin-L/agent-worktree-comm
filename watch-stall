@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Stall detector: when a task is in progress and every role's pane has been
+# still for the threshold, drop a check request into the PM inbox.
+#
+#   watch-stall <minutes> <pm-role> <pm-worktree> <role>=<tmux-session>...
+#
+# A working agent redraws its pane continuously (spinner, elapsed time); an
+# agent waiting for input does not. "Every pane unchanged for N minutes" is
+# therefore "everybody is waiting" — the state where a missed ping or a
+# question left on a console deadlocks the whole pipeline. Long-running work
+# keeps at least one pane moving and never triggers this.
+#
+# One still pane is not idle: an agent that ended its turn while a background
+# shell is running (a long build or test) waits to be re-invoked by it. The
+# TUI footer shows that state, and STALL_BUSY_MARKER (an extended regex,
+# matched against the pane) treats it as activity.
+#
+# The request is an ordinary message file in messages/<pm-role>/, so whichever
+# inbox watcher the PM uses delivers it. One request per stall: it is not
+# repeated until a role other than the PM moves again.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MINUTES="${1:?threshold in minutes is required}"
+PM_ROLE="${2:?pm role is required}"
+PM_DIR="${3:?pm worktree is required}"
+shift 3
+(( $# > 0 )) || { echo "watch-stall: no role=session pairs given" >&2; exit 1; }
+
+THRESHOLD="$(awk -v m="$MINUTES" 'BEGIN { printf "%d", m * 60 }')"
+(( THRESHOLD > 0 )) || { echo "watch-stall: threshold must be positive" >&2; exit 1; }
+POLL="${STALL_POLL_SECONDS:-15}"
+TAIL_LINES="${STALL_TAIL_LINES:-15}"
+# Claude Code footer: "· 1 shell · ↓ to manage"; Codex: "1 background terminal running".
+BUSY_MARKER="${STALL_BUSY_MARKER-· [0-9]+ shells?( |\$)|[0-9]+ background terminals? running}"
+INBOX="$SCRIPT_DIR/messages/$PM_ROLE"
+
+ROLES=()
+declare -A SESSION=() LAST=() CHANGED=()
+for pair in "$@"; do
+  ROLES+=("${pair%%=*}")
+  SESSION[${pair%%=*}]="${pair#*=}"
+done
+PM_SESSION="${SESSION[$PM_ROLE]:?pm role must be among the role=session pairs}"
+
+pane() { tmux capture-pane -p -t "$1:agent" 2>/dev/null || true; }
+
+# A task is in progress while the PM worktree sits on a non-default branch
+# (the PM stays on the task branch from kickoff until the human merges).
+task_branch() {
+  local branch default
+  branch="$(git -C "$PM_DIR" branch --show-current 2>/dev/null || true)"
+  default="$(git -C "$PM_DIR" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  default="${default#origin/}"
+  case "$branch" in
+    ""|main|master|"$default") return 1 ;;
+  esac
+  echo "$branch"
+}
+
+write_request() {
+  local branch="$1" now="$2" role idle tmp file
+  mkdir -p "$INBOX"
+  tmp="$INBOX/.stall-check.tmp"
+  file="$INBOX/$(date +%F)-watcher-stall-check-$(date +%H%M%S).md"
+  {
+    cat <<EOF
+---
+from: watcher
+to: $PM_ROLE
+---
+
+# 전 역할 정지 감지 — 점검 요청
+
+\`$branch\` 작업 중인데 모든 역할(${ROLES[*]})의 화면이 $(( THRESHOLD / 60 ))분 넘게 변하지 않았다. 아래 화면을 보고 누가 무엇을 기다리는지 판단해줘.
+
+- 핑을 빼먹었거나 답을 기다리는 역할이 있으면 그 역할의 \`messages/\` 인박스에 메시지를 쓴다.
+- 권한 확인 창이나 오류 화면처럼 입력창이 아닌 상태로 멈춘 역할에는 메시지를 보내지 않는다(전달된 글자가 그 창의 응답으로 들어간다). 사람에게 알린다.
+- 사람의 테스트나 머지를 기다리는 것처럼 정상적인 대기라면 아무것도 하지 않는다.
+- 다른 역할의 tmux 세션에 직접 입력하지 않는다.
+
+이 요청은 다른 역할이 다시 움직이기 전까지 반복되지 않는다. 처리한 뒤 이 파일은 \`old/$PM_ROLE/\` 로 옮긴다.
+EOF
+    for role in "${ROLES[@]}"; do
+      [[ "$role" == "$PM_ROLE" ]] && continue
+      idle=$(( (now - CHANGED[$role]) / 60 ))
+      printf '\n## %s (`%s`) — %s분 정지\n\n' "$role" "${SESSION[$role]}" "$idle"
+      if tmux has-session -t "${SESSION[$role]}" 2>/dev/null; then
+        printf '~~~~text\n'
+        pane "${SESSION[$role]}" | grep -v '^[[:space:]]*$' | tail -n "$TAIL_LINES"
+        printf '~~~~\n'
+      else
+        printf '세션이 실행 중이 아니다.\n'
+      fi
+    done
+  } > "$tmp"
+  mv "$tmp" "$file"      # atomic: the inbox watcher never sees a half-written file
+  echo "$(date '+%F %T') stall on $branch — wrote ${file#"$SCRIPT_DIR/"}"
+}
+
+echo "watching ${ROLES[*]} for a ${THRESHOLD}s all-idle stall -> $INBOX"
+
+armed=1
+while tmux has-session -t "$PM_SESSION" 2>/dev/null; do
+  now="$(date +%s)"
+  for role in "${ROLES[@]}"; do
+    content="$(pane "${SESSION[$role]}")"
+    hash="$(md5sum <<<"$content")"
+    busy=0
+    [[ -n "$BUSY_MARKER" ]] && grep -qE -- "$BUSY_MARKER" <<<"$content" && busy=1
+    if (( busy == 1 )) || [[ "${LAST[$role]:-}" != "$hash" ]]; then
+      LAST[$role]="$hash"
+      CHANGED[$role]="$now"
+      # The PM reacting to a request must not re-arm it; only other roles do.
+      [[ "$role" == "$PM_ROLE" ]] || armed=1
+    fi
+  done
+
+  if branch="$(task_branch)"; then
+    newest=0
+    for role in "${ROLES[@]}"; do
+      (( CHANGED[$role] > newest )) && newest="${CHANGED[$role]}"
+    done
+    if (( armed == 1 && now - newest >= THRESHOLD )); then
+      write_request "$branch" "$now"
+      armed=0
+    fi
+  else
+    armed=1               # no task in progress: idle is normal; start fresh on the next task
+  fi
+  sleep "$POLL"
+done

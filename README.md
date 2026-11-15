@@ -349,6 +349,10 @@ Set `EXTERNAL_WATCHER=true` in `.agents.sh`. `agents up` starts a separate `inbo
 
 The commands below apply only to the legacy Claude internal monitoring mode with the external watcher disabled. That mode requires `inotify-tools`.
 
+### Stall Detection
+
+`agents up` also starts a `stall-watch` window in the PM session. While a task is in progress (PM worktree on a task branch), if **every** role's pane stays unchanged for `STALL_CHECK_MINUTES` (default 15), it writes a check request to `messages/pm/` with `from: watcher` and the tail of each role's screen. PM decides who is waiting on what (see the PM role instructions). A role that ended its turn while a background shell is still running counts as busy, not idle. The request is sent once per stall.
+
 ### Watch Target per Agent
 
 | Agent | Watch directories |

@@ -20,6 +20,15 @@
 #   EXTERNAL_WATCHER run the portable orchestrator-owned inbox watcher; default false
 #   WATCH_POLL_INTERVAL  watcher polling interval in seconds; default 1
 #   NO_ATTACH        start sessions without attaching after `up`; default false
+#   STALL_CHECK_MINUTES  when a task is in progress (PM worktree on a task
+#                    branch) and every role's pane has been still this long,
+#                    write a check request into the PM inbox; default 15,
+#                    0 disables. One request per stall.
+#   STALL_NOTIFY_ROLE  role that receives the request; default "pm"
+#   STALL_BUSY_MARKER  extended regex; a pane matching it counts as busy even
+#                    when still (agent waiting on a background shell). Default
+#                    matches Claude Code's "· 1 shell ·" footer and Codex's
+#                    "1 background terminal running"; empty disables.
 #   SESSION_LOG_NOTION_DB  Notion database ID with one row per issue (title
 #                    starting "#<number>"). When set, `agents archive <issue>`
 #                    attaches the session transcripts to that row; unset ⇒ the
@@ -37,7 +46,9 @@
 #   BOOT_READY_MARKER   pane substring that signals the input UI is rendered;
 #                    default "❯" for Claude Code.
 #   CODEX_READY_MARKER  Codex TUI input marker; default "› Ask Codex".
-#   CODEX_TRUST_MARKER  Codex first-run trust dialog substring; accepted automatically.
+#   CODEX_TRUST_MARKER  extended regex matching Codex's first-run folder trust
+#                    dialog; accepted automatically. Default covers both the old
+#                    and the current wording.
 #   CODEX_UPDATE_MARKER Codex startup "Update available" dialog substring; skipped
 #                    once with Esc (never Enter, which would run npm install).
 #   BOOT_TRUST_MARKER   pane substring of claude's first-run "trust this folder"

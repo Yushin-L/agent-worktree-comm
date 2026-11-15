@@ -140,6 +140,16 @@ To see what front / back / review are currently working on without waiting for a
 
 Observation only — never type into another agent's session, never edit its worktree files. The directed communication path remains `messages/{recipient}/`. Use the tmux capture as a low-cost progress probe, not as a substitute for the message protocol.
 
+## Stall Check Requests
+
+The orchestrator watches every role's pane. When a task is in progress and **all** of them have been still for a while (default 15 minutes), it writes `messages/pm/{date}-watcher-stall-check-{time}.md` (`from: watcher`) containing the tail of each role's screen. Everybody waiting usually means a ping was missed or a question was left on a console. On such a message:
+
+- A role is waiting for an answer, or finished without pinging → write to that role's `messages/` inbox (or answer the pending question).
+- A role is stuck on something that is not its input prompt (permission dialog, error screen, crashed session) → do **not** message it — delivered text would be typed into that dialog. Tell the human.
+- Everyone is legitimately waiting (human testing / merging) → do nothing.
+
+The request is not repeated until another role moves again. Archive it to `old/pm/` once handled.
+
 ## Session Startup Watcher
 
 If the runtime uses the external `agents` watcher, do not start an internal watcher or install `inotify-tools`; wait for inbox events delivered by the orchestrator. The following startup procedure applies only to a runtime explicitly configured for legacy internal monitoring.
