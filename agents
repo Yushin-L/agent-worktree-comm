@@ -46,6 +46,10 @@ source "$CONFIG"
 : "${CODEX_REASONING_EFFORT:=}"
 : "${EXTERNAL_WATCHER:=false}"
 : "${WATCH_POLL_INTERVAL:=1}"
+: "${STALL_CHECK_MINUTES:=15}"                 # all roles idle this long during a task ⇒ ask the PM to check; 0 disables
+: "${STALL_NOTIFY_ROLE:=pm}"                    # role whose inbox receives the stall check request
+# Extended regex that marks a still pane as busy (agent waiting on a background
+# shell). Unset ⇒ watch-stall's default for Claude Code; empty ⇒ disabled.
 : "${NO_ATTACH:=false}"
 : "${SESSION_LOG_NOTION_DB:=}"                    # Notion database holding one row per issue; empty ⇒ local archive only
 : "${SESSION_LOG_NOTION_TOKEN_ENV:=NOTION_API_KEY}" # NAME of the env var holding the Notion token (never the token itself)
@@ -259,6 +263,24 @@ start_role() {
     tmux new-window -d -t "$session" -n inbox-watch -c "$SCRIPT_DIR" \
       "$SCRIPT_DIR/watch-inbox '$role' '$session:agent' '$WATCH_POLL_INTERVAL'" || {
       echo "[$session] ERROR: failed to start inbox-watch window" >&2
+      return 1
+    }
+  fi
+
+  # Stall detector lives in the PM's session: it watches every role's pane and
+  # writes a check request into the PM inbox when all of them have gone quiet.
+  if [[ "$role" == "$STALL_NOTIFY_ROLE" && "$STALL_CHECK_MINUTES" != "0" ]]; then
+    local stall_cmd r
+    stall_cmd=""
+    if [[ -n "${STALL_BUSY_MARKER+set}" ]]; then
+      stall_cmd="env STALL_BUSY_MARKER=$(shell_quote "$STALL_BUSY_MARKER") "
+    fi
+    stall_cmd+="$(shell_quote "$SCRIPT_DIR/watch-stall") $(shell_quote "$STALL_CHECK_MINUTES") $(shell_quote "$role") $(shell_quote "$dir")"
+    for r in "${ROLES[@]}"; do
+      stall_cmd+=" $(shell_quote "$r=$(session_name "$r")")"
+    done
+    tmux new-window -d -t "$session" -n stall-watch -c "$SCRIPT_DIR" "$stall_cmd" || {
+      echo "[$session] ERROR: failed to start stall-watch window" >&2
       return 1
     }
   fi

@@ -11,6 +11,7 @@ agent-worktree-comm/
 ├── agents                ← tmux 오케스트레이터 (실행 스크립트)
 ├── watch-inbox           ← 엔진 공통 외부 인박스 watcher
 ├── notion-attach         ← 이슈의 노션 행에 파일을 첨부 (`agents archive` 가 호출)
+├── watch-stall           ← 전 역할 정지 감지 → PM 인박스에 점검 요청
 ├── .agents.sh.example    ← 프로젝트별 설정 템플릿
 ├── .agents.sh            ← (gitignore) 실제 프로젝트 설정 — 사용자가 작성
 ├── role_templates/       ← 엔진 공통 역할 지침 템플릿
@@ -135,6 +136,16 @@ alias agents='./agent-worktree-comm/agents'   # 프로젝트 root 에서만 동�
 - **보관 없이 `down` 한 경우**: `agents down` 이 `agents archive <issue> --since '<시각>'` 형태의 안내를 출력합니다. 세션 파일은 디스크에 남아 있으므로 그 명령으로 나중에 보관할 수 있습니다. `--no-upload` 는 노션 업로드를 건너뜁니다.
 - **주의**: 세션 기록에는 도구 출력이 그대로 들어 있습니다(환경변수, 조회 결과 등). 노션 DB 의 공유 범위를 확인하고, 기록을 GitHub 에는 올리지 않습니다.
 
+### 전 역할 정지 감지 (`stall-watch`)
+
+한 역할의 작업이 길어지거나 핑이 빠지면 모든 역할이 서로를 기다리며 멈추는 경우가 있습니다. `agents up` 은 PM 세션에 `stall-watch` 창을 띄워 이를 감지합니다.
+
+- **조건**: PM 워크트리가 task 브랜치에 있고(= 작업 진행 중), **모든 역할의 화면이 `STALL_CHECK_MINUTES`(기본 15분) 동안 변하지 않은** 경우입니다. 작업 중인 에이전트는 화면이 계속 바뀌므로 긴 작업은 걸리지 않습니다.
+- **백그라운드 작업 대기는 정지가 아닙니다.** 긴 빌드·테스트를 백그라운드로 걸어 두고 턴을 끝낸 에이전트는 화면이 멈춰 있지만, 하단 표시(`· 1 shell ·`)를 보고 작업 중으로 칩니다. 이 판별식은 `STALL_BUSY_MARKER` 로 바꿀 수 있고, 기본값은 Claude Code 화면 기준입니다(Codex 용 기본값은 없음).
+- **동작**: `messages/pm/` 에 `…-watcher-stall-check-….md` 를 씁니다. 각 역할 화면의 마지막 15줄이 들어 있고, 평소 인박스 워처가 PM 에게 전달합니다. PM 은 누가 무엇을 기다리는지 보고 메시지를 보내거나 사람에게 알립니다.
+- **한 번만**: 같은 정지에 대해서는 한 번만 요청합니다. PM 이 아닌 역할이 다시 움직여야 다음 요청이 가능해집니다. PR 을 올리고 사람의 테스트를 기다리는 동안 반복해서 깨우지 않기 위해서입니다.
+- **끄기**: `.agents.sh` 에 `STALL_CHECK_MINUTES=0`. 값을 바꾸면 다음 `agents up` 부터 적용됩니다(이미 떠 있는 세션에는 창이 추가되지 않음).
+
 ### SSH 끊김 대응
 
 tmux 세션은 SSH 단절을 견딥니다. 끊긴 후 재접속하면 `agents up` 또는 `tmux attach -t <PROJECT>-pm` 으로 PM conversation 그대로 복귀.
@@ -243,3 +254,4 @@ worktree_dir() {
 - 2026-04-24 초안 (drive 프로젝트 기반)
 - 2026-04-26 `agents init` 추가 (clone 기반 신규 프로젝트 부트스트랩), ROLES vocab 표준화 (`pm | back | front | review`), placeholder 치환 매핑 정리
 - 2026-11-11 `agents archive` 추가 (이슈별 세션 기록 보관, 노션 이슈 행 첨부), `notion-attach` 추가
+- 2026-11-15 `watch-stall` 추가 (전 역할 정지 감지 → PM 인박스에 점검 요청)
