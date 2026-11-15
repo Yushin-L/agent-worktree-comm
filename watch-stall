@@ -31,7 +31,8 @@ THRESHOLD="$(awk -v m="$MINUTES" 'BEGIN { printf "%d", m * 60 }')"
 (( THRESHOLD > 0 )) || { echo "watch-stall: threshold must be positive" >&2; exit 1; }
 POLL="${STALL_POLL_SECONDS:-15}"
 TAIL_LINES="${STALL_TAIL_LINES:-15}"
-BUSY_MARKER="${STALL_BUSY_MARKER-· [0-9]+ shells?( |\$)}"   # Claude Code footer: "· 1 shell · ↓ to manage"
+# Claude Code footer: "· 1 shell · ↓ to manage"; Codex: "1 background terminal running".
+BUSY_MARKER="${STALL_BUSY_MARKER-· [0-9]+ shells?( |\$)|[0-9]+ background terminals? running}"
 INBOX="$SCRIPT_DIR/messages/$PM_ROLE"
 
 ROLES=()
